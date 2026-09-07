@@ -121,6 +121,9 @@ h1,h2,h3{margin:0 0 8px}
 /* 記録ラベル */
 .recLabel{position:absolute;transform:translate(-50%,-50%);background:rgba(10,16,24,.94);color:#fff;border:2px solid;border-radius:10px;padding:5px 9px;font-size:12.5px;line-height:1.35;white-space:nowrap;text-align:center;pointer-events:none;box-shadow:0 3px 12px rgba(0,0,0,.6);text-shadow:0 1px 1px #000}
 
+.spotLabel{transform:translate(-50%,-100%);font-size:12px;padding:4px 8px;border-radius:9px;background:rgba(10,16,24,.92)}
+.spotLabel::after{content:'';position:absolute;left:50%;bottom:-7px;transform:translateX(-50%);border:6px solid transparent;border-top-color:rgba(10,16,24,.92);border-bottom:0}
+
 /* menu */
 #menu{position:absolute;inset:0 auto 0 0;width:min(84vw,340px);z-index:30;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding-top:var(--safe-top);box-shadow:0 0 40px rgba(0,0,0,.6)}
 .menuHead{display:flex;align-items:center;justify-content:space-between;padding:12px 12px 8px 16px;border-bottom:1px solid var(--border)}

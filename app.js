@@ -169,7 +169,7 @@ const S = window.S = {
   infoWin: null,
   drawing: null,
   boards: [], boardMarkers: new Map(), boardsOn: false, boardAdding: false,
-  spots: [], events: [], spotMarkers: new Map(), spotsOn: true, spotBarOn: false, spotAdding: false,
+  spots: [], events: [], spotMarkers: new Map(), spotLabels: [], spotsOn: true, spotBarOn: false, spotAdding: false,
   assignments: [], asgPolys: new Map(), asgLabels: [], assignBarOn: false, drawPurpose: 'record',
   stations: [], stationMarkers: [], stationsOn: true,
 };
@@ -310,7 +310,7 @@ async function initMap() {
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
     styleTowns();
-    const z = S.map.getZoom(); if (S._lastZoom !== undefined && ((z >= 15) !== (S._lastZoom >= 15) || (z >= 14) !== (S._lastZoom >= 14))) { renderRecords(); renderAssignments(); } S._lastZoom = z;
+    const z = S.map.getZoom(); if (S._lastZoom !== undefined && ((z >= 15) !== (S._lastZoom >= 15) || (z >= 14) !== (S._lastZoom >= 14) || (z >= 13) !== (S._lastZoom >= 13))) { renderRecords(); renderAssignments(); renderSpots(); } S._lastZoom = z;
   });
 }
 
@@ -393,15 +393,15 @@ let RecLabel = null;
 function ensureLabelClass() {
   if (RecLabel) return;
   RecLabel = class extends google.maps.OverlayView {
-    constructor(pos, html, color) { super(); this.pos = pos; this.html = html; this.color = color; this.div = null; }
+    constructor(pos, html, color, opt = {}) { super(); this.pos = pos; this.html = html; this.color = color; this.div = null; this.dy = opt.dy || 0; this.cls = opt.cls || 'recLabel'; }
     onAdd() {
-      const d = document.createElement('div'); d.className = 'recLabel'; d.style.borderColor = this.color; d.innerHTML = this.html;
+      const d = document.createElement('div'); d.className = this.cls; if (this.color) d.style.borderColor = this.color; d.innerHTML = this.html;
       this.div = d; this.getPanes().floatPane.appendChild(d);   // 最前面。クリックはCSSでポリゴンへ通す
     }
     draw() {
       if (!this.div) return;
       const p = this.getProjection().fromLatLngToDivPixel(new google.maps.LatLng(this.pos.lat, this.pos.lng));
-      this.div.style.left = p.x + 'px'; this.div.style.top = p.y + 'px';
+      this.div.style.left = p.x + 'px'; this.div.style.top = (p.y + this.dy) + 'px';
     }
     onRemove() { this.div?.remove(); this.div = null; }
   };
@@ -1097,8 +1097,11 @@ function setSpotAdding(on) {
   setAddingUI(on);
 }
 function renderSpots() {
+  ensureLabelClass();
   for (const m of S.spotMarkers.values()) m.setMap(null);
   S.spotMarkers.clear();
+  for (const l of S.spotLabels) l.setMap(null); S.spotLabels = [];
+  const showLabels = S.map.getZoom() >= 13;
   const up = upcoming(S.events).length;
   $('#spotStat').textContent = `拠点 ${S.spots.length}か所　今後の予定 ${up}件`;
   if (!S.spotsOn) return;
@@ -1113,6 +1116,12 @@ function renderSpots() {
     });
     m.addListener('click', () => { if (!S.spotAdding && !S.boardAdding) showSpot(sp); });
     S.spotMarkers.set(sp.id, m);
+    if (showLabels) {
+      const evs = spotEvents(sp.id); const done = history(evs).length;
+      const line2 = next ? `次 <b>${fmtDate(next.date)}</b>${next.time ? ' ' + esc(next.time) : ''}${next.member ? ' ' + esc(next.member) : ''}` : (done ? `予定なし ／ 実施${done}回` : '予定なし');
+      const lb = new RecLabel({ lat: sp.lat, lng: sp.lng }, `${k.emoji} <b>${esc(sp.name)}</b><br>${line2}`, k.color, { dy: -48, cls: 'recLabel spotLabel' });
+      lb.setMap(S.map); S.spotLabels.push(lb);
+    }
   }
 }
 function addSpotAt(latLng) {
