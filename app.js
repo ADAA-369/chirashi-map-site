@@ -969,13 +969,19 @@ const BOARD_STYLE = {
 };
 const BOARD_ST_LABEL = k => BOARD_STYLE[k]?.name || k;
 const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: '掲示場' }, general: { name: '一般ポスター（支援者宅・店舗など）', short: '一般' } };
-// 看板の形のアイコン（SVG）。official＝支柱付きの掲示板、general＝貼り紙
-function boardIcon(kind, color, text) {
-  const t = String(text || '').slice(0, 4); const fs = t.length >= 3 ? 11 : 13;
-  const svg = kind === 'general'
-    ? `<svg xmlns='http://www.w3.org/2000/svg' width='36' height='42' viewBox='0 0 36 42'><path d='M6 4h24v30l-6-4-6 4-6-4-6 4z' fill='${color}' stroke='#fff' stroke-width='2'/><circle cx='18' cy='6' r='2.5' fill='#333'/><text x='18' y='22' font-size='${fs}' font-weight='700' text-anchor='middle' fill='#111' font-family='sans-serif'>${t}</text></svg>`
-    : `<svg xmlns='http://www.w3.org/2000/svg' width='40' height='44' viewBox='0 0 40 44'><rect x='18' y='26' width='4' height='16' fill='#6b4f2a'/><rect x='3' y='3' width='34' height='24' rx='3' fill='${color}' stroke='#fff' stroke-width='2.5'/><rect x='7' y='7' width='26' height='16' fill='rgba(255,255,255,.35)'/><text x='20' y='20' font-size='${fs}' font-weight='700' text-anchor='middle' fill='#111' font-family='sans-serif'>${t}</text></svg>`;
-  return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), scaledSize: new google.maps.Size(kind === 'general' ? 36 : 40, kind === 'general' ? 42 : 44), anchor: new google.maps.Point(kind === 'general' ? 18 : 20, kind === 'general' ? 40 : 42) };
+// 看板の形のアイコン（SVG）。絵が主役：掲示板にポスターが貼られた図。色＝状態、番号は下に小さく
+function boardIcon(kind, color, text, status) {
+  const t = String(text || '').slice(0, 4);
+  const mark = status === 'done' ? '✓' : status === 'damaged' ? '!' : status === 'check' ? '?' : status === 'working' ? '…' : status === 'reserved' ? '予' : '';
+  const badge = mark ? `<circle cx='40' cy='8' r='8' fill='#fff' stroke='${color}' stroke-width='2'/><text x='40' y='11.5' font-size='10' font-weight='700' text-anchor='middle' fill='${color}' font-family='sans-serif'>${mark}</text>` : '';
+  const board = kind === 'general'
+    // 貼り紙：紙1枚に候補者ポスター風の色面
+    ? `<rect x='10' y='8' width='28' height='30' rx='2' fill='#fff' stroke='#333' stroke-width='1.5'/><rect x='13' y='11' width='22' height='14' fill='${color}' opacity='.9'/><rect x='13' y='27' width='22' height='3' fill='#333'/><rect x='13' y='32' width='14' height='3' fill='#777'/>`
+    // 掲示板：木の支柱＋白い板に4枚のポスター
+    : `<rect x='22' y='34' width='4' height='14' fill='#6b4f2a'/><rect x='5' y='6' width='38' height='30' rx='2' fill='#f7f3e8' stroke='#5b4630' stroke-width='2'/><rect x='9' y='10' width='14' height='10' fill='${color}'/><rect x='25' y='10' width='14' height='10' fill='#e11d48' opacity='.75'/><rect x='9' y='22' width='14' height='10' fill='#2563eb' opacity='.75'/><rect x='25' y='22' width='14' height='10' fill='#f59e0b' opacity='.75'/>`;
+  const num = t ? `<rect x='12' y='40' width='24' height='13' rx='6.5' fill='#111' opacity='.85'/><text x='24' y='50' font-size='10' font-weight='700' text-anchor='middle' fill='#fff' font-family='sans-serif'>${t}</text>` : '';
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><rect x='1' y='1' width='46' height='54' rx='8' fill='${color}' opacity='.25'/>${board}${num}${badge}</svg>`;
+  return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), scaledSize: new google.maps.Size(48, 56), anchor: new google.maps.Point(24, 52) };
 }
 S.boardKindFilter = 'all';
 function setLegend(open) { S.legendOpen = open; $('#legend').hidden = !open; $('#legendBtn').classList.toggle('on', open); }
@@ -986,7 +992,7 @@ function toggleBoards(on) {
   $('#legendBtn').hidden = S.boardsOn || S.spotBarOn || S.assignBarOn; if (S.boardsOn) setLegend(false);
   if (S.boardsOn && S.assignBarOn) toggleAssignBar(false);
   if (!S.boardsOn) { setBoardAdding(false); S.infoWin.close(); }
-  renderBoards();
+  renderBoards(); renderSpots();
 }
 function setBoardAdding(on) {
   S.boardAdding = on; if (on) S.spotAdding = false;
@@ -1007,7 +1013,7 @@ function renderBoards() {
     const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
     const m = new google.maps.Marker({
       position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20,
-      icon: boardIcon(kind, st.color, b.no || st.label),
+      icon: boardIcon(kind, st.color, b.no, b.status),
       title: `${b.no ? b.no + ' ' : ''}${b.place || ''}（${BOARD_ST_LABEL(b.status)}）`,
     });
     m.addListener('click', () => { if (!S.boardAdding) showBoard(b); });
@@ -1380,7 +1386,7 @@ function toggleAssignBar(on) {
   if (S.assignBarOn) { if (S.boardsOn) toggleBoards(false); if (S.spotBarOn) toggleSpotBar(false); }
   $('#assignBar').hidden = !S.assignBarOn;
   $('#legendBtn').hidden = S.boardsOn || S.spotBarOn || S.assignBarOn; if (S.assignBarOn) setLegend(false);
-  renderAssignments();
+  renderAssignments(); renderSpots();
 }
 function renderAssignments() {
   ensureLabelClass();
