@@ -871,6 +871,7 @@ async function showBoard(b) {
     <label>写真（任意・自動で縮小します）<input id="bPhoto" type="file" accept="image/*" capture="environment"></label>
     <div class="photoBox" id="bPhotoBox">${b.photo_path ? '<div class="small">写真を読み込み中…</div>' : ''}</div>
     <label>メモ（例：破損あり、貼る位置が高い）<input id="bMemo" type="text" value="${esc(b.memo || '')}"></label>
+    ${extLinks(b.lat, b.lng)}
     <details style="margin-top:10px"><summary class="small">種類・番号・場所を直す／削除</summary>
       <label>種類<select id="bKind"><option value="official" ${(b.kind || 'official') === 'official' ? 'selected' : ''}>選挙用ポスター掲示場</option><option value="general" ${b.kind === 'general' ? 'selected' : ''}>一般ポスター</option></select></label>
       <label>番号<input id="bNo" type="text" value="${esc(b.no)}"></label>
@@ -1006,6 +1007,7 @@ function showSpot(sp) {
     ${hist.slice(0, 10).map(evRow).join('') || '<div class="small">まだ記録がありません</div>'}
     ${hist.length > 10 ? `<div class="small">…ほか${hist.length - 10}回</div>` : ''}
     <div class="btnRow"><button class="ghost" id="spPlan">＋ 予定を追加</button><button class="primary" id="spDidNow">今日ここで実施した</button></div>
+    ${extLinks(sp.lat, sp.lng)}
     <details style="margin-top:10px"><summary class="small">名前・種類を直す／削除</summary>
       <label>種類<select id="spKind">${Object.entries(SPOT_KIND).map(([kk, v]) => `<option value="${kk}" ${kk === sp.kind ? 'selected' : ''}>${v.emoji} ${v.name}</option>`).join('')}</select></label>
       <label>名前<input id="spName" type="text" value="${esc(sp.name)}"></label>
@@ -1059,6 +1061,79 @@ function showSpotList() {
   $('#sheetBody').querySelectorAll('tr[data-spot]').forEach(tr => tr.onclick = () => { const sp = S.spots.find(x => x.id === tr.dataset.spot); if (!sp) return; S.map.panTo({ lat: sp.lat, lng: sp.lng }); showSpot(sp); });
 }
 
+/* ---------------- Googleマップ連携（ストリートビュー・経路） ---------------- */
+const svUrl = (lat, lng) => `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
+const gmUrl = (lat, lng) => `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+const extLinks = (lat, lng) => `<div class="btnRow"><a class="ghost linkBtn" target="_blank" rel="noopener" href="${svUrl(lat, lng)}">🧍 ストリートビュー</a><a class="ghost linkBtn" target="_blank" rel="noopener" href="${gmUrl(lat, lng)}">🗺 Googleマップで開く</a></div>`;
+
+/* ---------------- 場所の検索（町名＝ローカル／施設・住所＝国土地理院＋Google） ---------------- */
+function openSearch() { $('#searchBox').hidden = false; $('#searchResults').innerHTML = ''; setTimeout(() => $('#searchInp').focus(), 50); }
+function closeSearch() { $('#searchBox').hidden = true; $('#searchInp').blur(); }
+async function runSearch() {
+  const q = $('#searchInp').value.trim(); if (!q) return;
+  const box = $('#searchResults'); box.innerHTML = '<div class="small" style="padding:8px">検索中…</div>';
+  const items = [];
+  // 1) 町丁目（ローカル）
+  const qn = q.replace(/\s+/g, '');
+  for (const t of S.towns) {
+    if (t.kigo && t.kigo !== 'E1') continue;
+    if ((t.city + t.name).includes(qn) || t.name.includes(qn)) items.push({ ico: '🏘', name: `${t.city} ${t.name}`, sub: `町丁目 ／ ${t.setai.toLocaleString()}世帯`, lat: t.feature.properties.Y_CODE, lng: t.feature.properties.X_CODE, zoom: 16 });
+    if (items.length >= 8) break;
+  }
+  // 2) 国土地理院の住所・施設検索（無料・キー不要）。愛知県周辺を優先
+  const inAichi = (lat, lng) => lat > 34.5 && lat < 35.5 && lng > 136.5 && lng < 138.0;
+  try {
+    const d = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(q)).then(r => r.json());
+    const near = [], far = [];
+    for (const f of d || []) {
+      const [lng, lat] = f.geometry.coordinates; const title = f.properties.title || '';
+      if (items.some(it => it.name.replace(/\s/g, '') === title.replace(/[県市町村]/g, m => m).replace(/^愛知県/, '').replace(/\s/g, ''))) continue;
+      (inAichi(lat, lng) ? near : far).push({ ico: '📍', name: title, sub: /小学校|中学校|高校|公民館|駅|病院|役場|市役所|センター|公園|神社|寺/.test(title) ? '施設' : '住所・地名', lat, lng, zoom: 17 });
+    }
+    items.push(...near.slice(0, 6), ...far.slice(0, 2));
+  } catch (e) { console.warn('GSI search failed', e); }
+  // 3) Google の住所検索（Geocoding API が有効な場合だけ）
+  if (!S._geocoderDenied) {
+    try {
+      const { Geocoder } = await google.maps.importLibrary('geocoding');
+      const gc = new Geocoder();
+      const bounds = new google.maps.LatLngBounds({ lat: 34.6, lng: 136.6 }, { lat: 35.4, lng: 137.9 });
+      const res = await gc.geocode({ address: q, region: 'JP', language: 'ja', bounds, componentRestrictions: { country: 'JP' } });
+      for (const r of (res.results || []).slice(0, 5)) {
+        const loc = r.geometry.location;
+        const name = r.formatted_address.replace(/^日本、?/, '').replace(/^〒\d{3}-\d{4}\s*/, '');
+        if (items.some(it => Math.abs(it.lat - loc.lat()) < 0.0005 && Math.abs(it.lng - loc.lng()) < 0.0005)) continue;
+        items.push({ ico: '🗺', name, sub: (r.types || []).includes('establishment') ? '施設（Google）' : '住所（Google）', lat: loc.lat(), lng: loc.lng(), zoom: r.geometry.location_type === 'ROOFTOP' ? 18 : 16 });
+      }
+    } catch (e) { if (e && e.code === 'REQUEST_DENIED') S._geocoderDenied = true; else console.warn(e); }
+  }
+  if (!items.length) { box.innerHTML = '<div class="small" style="padding:8px">見つかりませんでした。町名だけ、施設名だけ、など言い方を変えてみてください</div>'; return; }
+  box.innerHTML = items.map((it, i) => `<div class="sr" data-i="${i}"><span class="ico">${it.ico}</span><span class="nm"><b>${esc(it.name)}</b><span>${esc(it.sub)}</span></span></div>`).join('');
+  box.querySelectorAll('.sr').forEach(el => el.onclick = () => goTo(items[+el.dataset.i]));
+}
+function goTo(it) {
+  closeSearch();
+  S.map.panTo({ lat: it.lat, lng: it.lng }); S.map.setZoom(it.zoom || 16);
+  if (S.searchMarker) S.searchMarker.setMap(null);
+  S.searchMarker = new google.maps.Marker({ position: { lat: it.lat, lng: it.lng }, map: S.map, zIndex: 50, animation: google.maps.Animation.DROP, title: it.name,
+    icon: { path: 'M 0,0 C -2,-6 -12,-8 -12,-17 A 12,12 0 1,1 12,-17 C 12,-8 2,-6 0,0 Z', fillColor: '#ffd60a', fillOpacity: 1, strokeColor: '#333', strokeWeight: 2, scale: 1.3, labelOrigin: new google.maps.Point(0, -17) }, label: { text: '★', fontSize: '14px' } });
+  S.searchMarker.addListener('click', () => showSearchSheet(it));
+  showSearchSheet(it);
+}
+function showSearchSheet(it) {
+  openSheet(`
+    <h3>★ ${esc(it.name)}</h3>
+    <div class="small">${esc(it.sub || '')}</div>
+    ${extLinks(it.lat, it.lng)}
+    <div class="btnRow"><button class="ghost" id="ssSpot">🎤 ここを拠点に追加</button><button class="ghost" id="ssBoard">📌 ここにポスター場所を追加</button></div>
+    <div class="btnRow"><button class="ghost" id="ssClear">★を消す</button><button class="primary" id="ssClose">閉じる</button></div>
+  `);
+  $('#ssClose').onclick = closeSheet;
+  $('#ssClear').onclick = () => { if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } closeSheet(); };
+  $('#ssSpot').onclick = () => { toggleSpotBar(true); addSpotAt(new google.maps.LatLng(it.lat, it.lng)); setTimeout(() => { const n = $('#spName'); if (n && !n.value) n.value = it.name; }, 50); };
+  $('#ssBoard').onclick = () => { toggleBoards(true); addBoardAt(new google.maps.LatLng(it.lat, it.lng)); setTimeout(() => { const n = $('#bPlace'); if (n && !n.value) n.value = it.name; }, 50); };
+}
+
 /* ---------------- UI バインド ---------------- */
 function bindUI() {
   $('#periodSel').value = S.filter.period;
@@ -1092,6 +1167,10 @@ function bindUI() {
   $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; localStorage.removeItem('cm_user'); showLogin(); };
   $('#sheetHandle').onclick = closeSheet;
   $('#legendBtn').onclick = () => setLegend(!S.legendOpen);
+  $('#btnSearch').onclick = () => { if ($('#searchBox').hidden) openSearch(); else closeSearch(); };
+  $('#searchClose').onclick = closeSearch;
+  $('#searchGo').onclick = runSearch;
+  $('#searchInp').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
   // 凡例を左へスワイプで閉じる
   let lsx = null; $('#legend').addEventListener('touchstart', e => { lsx = e.touches[0].clientX; }, { passive: true });
   $('#legend').addEventListener('touchend', e => { if (lsx != null && lsx - e.changedTouches[0].clientX > 50) setLegend(false); lsx = null; });

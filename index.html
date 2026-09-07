@@ -20,6 +20,7 @@
     <div class="row">
       <button id="btnMenu" class="icon" aria-label="メニュー">☰</button>
       <div id="title">チラシ配布マップ</div>
+      <button id="btnSearch" class="icon" aria-label="場所を検索">🔍</button>
       <select id="periodSel" aria-label="期間">
         <option value="all">全期間</option>
         <option value="30" selected>直近30日</option>
@@ -30,6 +31,16 @@
   </header>
 
   <div id="noticeBanner" hidden></div>
+
+  <!-- 場所の検索 -->
+  <div id="searchBox" hidden>
+    <div class="searchRow">
+      <input id="searchInp" type="search" placeholder="町名・施設名・住所（例：宇治町公民館）" autocomplete="off" enterkeyhint="search">
+      <button id="searchGo" class="primary">検索</button>
+      <button id="searchClose" class="icon">✕</button>
+    </div>
+    <div id="searchResults"></div>
+  </div>
 
   <!-- 地図（描画レイヤーと同じ枠） -->
   <div id="mapWrap">
