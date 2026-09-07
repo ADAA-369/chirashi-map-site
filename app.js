@@ -162,7 +162,7 @@ const S = window.S = {
   settings: null, records: [], user: null,
   filter: { period: '30', flyers: new Set() },
   polys: new Map(),      // record.id -> google.maps.Polygon
-  labels: [],
+  labels: [], recIcons: [],
   overlapPolys: [],
   towns: [],             // {feature, id, name, city, setai, area}
   townFeatures: new Map(), // data feature id -> town
@@ -310,7 +310,7 @@ async function initMap() {
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
     styleTowns();
-    const z = S.map.getZoom(); if (S._lastZoom !== undefined && ((z >= 15) !== (S._lastZoom >= 15) || (z >= 14) !== (S._lastZoom >= 14) || (z >= 13) !== (S._lastZoom >= 13))) { renderRecords(); renderAssignments(); renderSpots(); } S._lastZoom = z;
+    const z = S.map.getZoom(); if (S._lastZoom !== undefined && z !== S._lastZoom) { renderRecords(); renderAssignments(); renderSpots(); } S._lastZoom = z;
   });
 }
 
@@ -346,6 +346,7 @@ function setAddingUI(on) {
   for (const p of S.overlapPolys) p.setOptions({ clickable: false });
   for (const p of S.asgPolys.values()) p.setOptions({ clickable: !on });
   for (const m of S.stationMarkers) m.setOptions({ clickable: !on });
+  for (const m of S.recIcons) m.setOptions({ clickable: !on });
   for (const m of S.boardMarkers.values()) m.setOptions({ clickable: !on });
   for (const m of S.spotMarkers.values()) m.setOptions({ clickable: !on });
   S.map.setOptions({ draggableCursor: on ? 'crosshair' : null });
@@ -447,7 +448,9 @@ function renderRecords() {
   S.polys.clear();
   for (const l of S.labels) l.setMap(null);
   S.labels = [];
+  for (const m of S.recIcons) m.setMap(null); S.recIcons = [];
   const showLabels = S.map.getZoom() >= 15;
+  const showIcons = S.map.getZoom() < 15;   // 引いた時は範囲の中心にアイコンを出す
   for (const p of S.overlapPolys) p.setMap(null);
   S.overlapPolys = [];
   const recs = filteredRecords();
@@ -463,6 +466,15 @@ function renderRecords() {
     });
     poly.addListener('click', ev => { if (!S.drawing) showRecord(r, ev.latLng); });
     S.polys.set(k, poly);
+    if (showIcons) {
+      const c = turf.centerOfMass(recPolygon(r)).geometry.coordinates;
+      const mk = new google.maps.Marker({ position: { lat: c[1], lng: c[0] }, map: S.map, zIndex: 4,
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: S.map.getZoom() >= 13 ? 11 : 8, fillColor: f.color, fillOpacity: 0.95, strokeColor: '#fff', strokeWeight: 2 },
+        label: S.map.getZoom() >= 13 ? { text: '📄', fontSize: '12px' } : undefined,
+        title: `${fmtDate(r.date)} ${r.member} ${list.map(x => flyerOf(x.flyer_id).name + ' ' + x.count + '枚').join('／')}` });
+      mk.addListener('click', () => { if (!S.drawing) showRecord(r); });
+      S.recIcons.push(mk);
+    }
     if (showLabels) {
       const c = turf.centerOfMass(recPolygon(r)).geometry.coordinates;
       const lines = list.map(x => `<span style="color:${flyerOf(x.flyer_id).color}">●</span>${esc(flyerOf(x.flyer_id).name)} <b>${x.count.toLocaleString()}</b>枚`).join('<br>');
