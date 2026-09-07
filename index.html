@@ -63,6 +63,17 @@
     <div id="boardAddHint" hidden>ポスターを貼る場所を地図でタップしてください　<button id="btnBoardAddCancel" class="ghost small">やめる</button></div>
   </div>
 
+  <!-- 拠点・辻立ちモードのバー -->
+  <div id="spotBar" hidden>
+    <div class="boardBarRow">
+      <span id="spotStat"></span>
+      <button id="btnSpotAdd" class="ghost">＋ 場所を追加</button>
+      <button id="btnSpotList" class="ghost">予定・実績</button>
+      <button id="btnSpotClose" class="ghost">✕ 閉じる</button>
+    </div>
+    <div id="spotAddHint" hidden>事務所や辻立ちの場所を地図でタップしてください　<button id="btnSpotAddCancel" class="ghost small">やめる</button></div>
+  </div>
+
   <!-- 形の調整（つまみ） -->
   <div id="adjustBar" hidden>
     <div id="adjustHint">白い四角を動かすと形を直せます（辺の途中の四角で角を増やせます）</div>
@@ -88,6 +99,7 @@
     <button class="menuItem" data-view="list">📋 配布一覧・CSV</button>
     <button class="menuItem" data-view="towns">🏘 町丁目ごとの配布率</button>
     <button class="menuItem" id="btnBoards">📌 ポスター掲示場（看板）</button>
+    <button class="menuItem" id="btnSpots">🎤 拠点・辻立ちスポット</button>
     <button class="menuItem" data-view="settings">⚙ 設定（チラシ・メンバー・告示日）</button>
     <button class="menuItem" id="btnSwitchUser">👤 名前を変える</button>
     <div class="menuFoot">

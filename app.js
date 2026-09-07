@@ -43,6 +43,14 @@ const LocalStore = {
   async deleteBoard(id) { localStorage.setItem(this.bkey, JSON.stringify((await this.loadBoards()).filter(x => x.id !== id))); },
   async uploadPhoto() { toast('端末内保存版では写真を保存できません'); return null; },
   async photoUrl() { return null; },
+  _l(k) { try { return JSON.parse(localStorage.getItem(k) || '[]'); } catch { return []; } },
+  _s(k, a) { localStorage.setItem(k, JSON.stringify(a)); },
+  async loadSpots() { return this._l('cm_spots_v1'); },
+  async saveSpot(x) { const a = this._l('cm_spots_v1'); const i = a.findIndex(y => y.id === x.id); if (i >= 0) a[i] = x; else a.push(x); this._s('cm_spots_v1', a); },
+  async deleteSpot(id) { this._s('cm_spots_v1', this._l('cm_spots_v1').filter(y => y.id !== id)); },
+  async loadEvents() { return this._l('cm_events_v1'); },
+  async saveEvent(x) { const a = this._l('cm_events_v1'); const i = a.findIndex(y => y.id === x.id); if (i >= 0) a[i] = x; else a.push(x); this._s('cm_events_v1', a); },
+  async deleteEvent(id) { this._s('cm_events_v1', this._l('cm_events_v1').filter(y => y.id !== id)); },
 };
 /* ---------------- 保存アダプタ（Supabase 共有） ---------------- */
 const SupabaseStore = {
@@ -107,14 +115,20 @@ const SupabaseStore = {
     const { data, error } = await this.client.storage.from('posters').createSignedUrl(path, 3600);
     return error ? null : data.signedUrl;
   },
+  async loadSpots() { const { data, error } = await this.client.from('spots').select('*').eq('deleted', false).order('name'); if (error) { console.error(error); return S.spots || []; } return data; },
+  async saveSpot(x) { const { error } = await this.client.from('spots').upsert({ id: x.id, kind: x.kind || 'station', name: x.name || '', lat: x.lat, lng: x.lng, memo: x.memo || '', updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
+  async deleteSpot(id) { const { error } = await this.client.from('spots').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id); if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; } },
+  async loadEvents() { const { data, error } = await this.client.from('spot_events').select('*').eq('deleted', false).order('date'); if (error) { console.error(error); return S.events || []; } return data; },
+  async saveEvent(x) { const { error } = await this.client.from('spot_events').upsert({ id: x.id, spot_id: x.spot_id, date: x.date, time: x.time || '', member: x.member || null, memo: x.memo || '', done: !!x.done, updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
+  async deleteEvent(id) { const { error } = await this.client.from('spot_events').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id); if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; } },
   // 15秒ごと＋画面復帰時に他の人の更新を取り込む
   subscribe(cb) {
     const tick = async () => {
       if (document.hidden || S.drawing || S.adjust) return;
       try {
-        const [recs, sets, boards] = await Promise.all([this.loadRecords(), this.loadSettings(), this.loadBoards()]);
-        const j = JSON.stringify([recs, sets, boards]);
-        if (j !== this._lastJson) { this._lastJson = j; cb(recs, sets, boards); }
+        const [recs, sets, boards, spots, events] = await Promise.all([this.loadRecords(), this.loadSettings(), this.loadBoards(), this.loadSpots(), this.loadEvents()]);
+        const j = JSON.stringify([recs, sets, boards, spots, events]);
+        if (j !== this._lastJson) { this._lastJson = j; cb(recs, sets, boards, spots, events); }
       } catch { }
     };
     this._timer = setInterval(tick, 15000);
@@ -138,6 +152,7 @@ const S = window.S = {
   infoWin: null,
   drawing: null,
   boards: [], boardMarkers: new Map(), boardsOn: false, boardAdding: false,
+  spots: [], events: [], spotMarkers: new Map(), spotsOn: true, spotBarOn: false, spotAdding: false,
 };
 
 const $ = s => document.querySelector(s);
@@ -156,14 +171,14 @@ window.addEventListener('unhandledrejection', e => { console.error(e.reason); to
 async function init() {
   bindUI();
   await login();                       // 合言葉の検証と名前の選択（設定はこの中で読み込む）
-  [S.records, S.boards] = await Promise.all([store.loadRecords(), store.loadBoards()]);
+  [S.records, S.boards, S.spots, S.events] = await Promise.all([store.loadRecords(), store.loadBoards(), store.loadSpots(), store.loadEvents()]);
   S.filter.flyers = new Set(S.settings.flyers.map(f => f.id));
   await loadGoogleMaps();
   await initMap();
   await loadTowns();
   renderAll();
-  store.subscribe((recs, sets, boards) => {
-    S.records = recs; if (boards) S.boards = boards;
+  store.subscribe((recs, sets, boards, spots, events) => {
+    S.records = recs; if (boards) S.boards = boards; if (spots) S.spots = spots; if (events) S.events = events;
     if (sets) { S.settings = { ...S.settings, ...sets }; for (const f of S.settings.flyers) if (!S.filter.flyers.has(f.id) && !S._userToggled) S.filter.flyers.add(f.id); }
     renderAll();
   });
@@ -258,7 +273,7 @@ async function initMap() {
   Object.assign(loc.style, { width: '40px', height: '40px', margin: '10px', borderRadius: '8px', fontSize: '20px', background: '#fff', color: '#333', boxShadow: '0 1px 4px rgba(0,0,0,.3)' });
   loc.onclick = () => navigator.geolocation?.getCurrentPosition(p => { S.map.panTo({ lat: p.coords.latitude, lng: p.coords.longitude }); S.map.setZoom(17); }, () => toast('現在地を取得できませんでした'), { enableHighAccuracy: true, timeout: 8000 });
   S.map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(loc);
-  S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); });
+  S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); });
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
     styleTowns();
@@ -354,7 +369,7 @@ function filteredRecords() {
 }
 
 function renderAll() {
-  renderChips(); renderNotice(); renderLegend(); renderRecords(); renderBoards();
+  renderChips(); renderNotice(); renderLegend(); renderRecords(); renderBoards(); renderSpots();
 }
 
 function renderRecords() {
@@ -762,6 +777,7 @@ const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: 
 S.boardKindFilter = 'all';
 function toggleBoards(on) {
   S.boardsOn = on ?? !S.boardsOn;
+  if (S.boardsOn && S.spotBarOn) toggleSpotBar(false);
   $('#boardBar').hidden = !S.boardsOn;
   $('#legend').hidden = S.boardsOn;
   if (!S.boardsOn) { setBoardAdding(false); S.infoWin.close(); }
@@ -892,6 +908,129 @@ function showBoardList() {
   $('#sheetBody').querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => { const b = S.boards.find(x => x.id === tr.dataset.id); if (!b) return; S.map.panTo({ lat: b.lat, lng: b.lng }); showBoard(b); });
 }
 
+/* ---------------- 拠点・辻立ちスポット ---------------- */
+const SPOT_KIND = {
+  office_party: { name: '党・県の事務所', emoji: '🏛', color: '#8b5cf6' },
+  office_own:   { name: '自分の事務所',   emoji: '🏠', color: '#2f81f7' },
+  station:      { name: '辻立ちの場所（駅・交差点）', emoji: '🎤', color: '#ef4444' },
+  other:        { name: 'その他の拠点',   emoji: '📍', color: '#64748b' },
+};
+const spotEvents = id => S.events.filter(e => e.spot_id === id);
+const upcoming = evs => evs.filter(e => !e.done && e.date >= today()).sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+const history = evs => evs.filter(e => e.done || e.date < today()).sort((a, b) => b.date.localeCompare(a.date));
+function toggleSpotBar(on) {
+  S.spotBarOn = on ?? !S.spotBarOn;
+  if (S.spotBarOn && S.boardsOn) toggleBoards(false);
+  $('#spotBar').hidden = !S.spotBarOn;
+  if (!S.spotBarOn) setSpotAdding(false);
+  renderSpots();
+}
+function setSpotAdding(on) {
+  S.spotAdding = on; $('#spotAddHint').hidden = !on;
+  S.map.setOptions({ draggableCursor: on ? 'crosshair' : null });
+}
+function renderSpots() {
+  for (const m of S.spotMarkers.values()) m.setMap(null);
+  S.spotMarkers.clear();
+  const up = upcoming(S.events).length;
+  $('#spotStat').textContent = `拠点 ${S.spots.length}か所　今後の予定 ${up}件`;
+  if (!S.spotsOn) return;
+  for (const sp of S.spots) {
+    const k = SPOT_KIND[sp.kind] || SPOT_KIND.other;
+    const next = upcoming(spotEvents(sp.id))[0];
+    const m = new google.maps.Marker({
+      position: { lat: sp.lat, lng: sp.lng }, map: S.map, zIndex: 30,
+      icon: { path: 'M 0,0 C -2,-6 -12,-8 -12,-17 A 12,12 0 1,1 12,-17 C 12,-8 2,-6 0,0 Z', fillColor: k.color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2, scale: 1.25, labelOrigin: new google.maps.Point(0, -17) },
+      label: { text: k.emoji, fontSize: '15px' },
+      title: `${sp.name}${next ? `　次回 ${fmtDate(next.date)} ${next.time}` : ''}`,
+    });
+    m.addListener('click', () => { if (!S.spotAdding && !S.boardAdding) showSpot(sp); });
+    S.spotMarkers.set(sp.id, m);
+  }
+}
+function addSpotAt(latLng) {
+  setSpotAdding(false);
+  const sp = { id: uid(), kind: 'station', name: '', lat: +latLng.lat().toFixed(6), lng: +latLng.lng().toFixed(6), memo: '' };
+  openSheet(`
+    <h3>拠点・辻立ちスポットを追加</h3>
+    <label>種類<select id="spKind">${Object.entries(SPOT_KIND).map(([k, v]) => `<option value="${k}" ${k === 'station' ? 'selected' : ''}>${v.emoji} ${v.name}</option>`).join('')}</select></label>
+    <label>名前<input id="spName" type="text" placeholder="例：近鉄蟹江駅 南口／○○事務所"></label>
+    <label>メモ（任意）<input id="spMemo" type="text" placeholder="例：朝7時〜8時が人通り多い"></label>
+    <div class="btnRow"><button class="ghost" id="spCancel">やめる</button><button class="primary" id="spSave">追加する</button></div>
+  `);
+  $('#spCancel').onclick = closeSheet;
+  $('#spSave').onclick = async () => {
+    sp.kind = $('#spKind').value; sp.name = $('#spName').value.trim() || SPOT_KIND[sp.kind].name; sp.memo = $('#spMemo').value.trim();
+    try { await store.saveSpot(sp); } catch { return; }
+    S.spots = await store.loadSpots(); closeSheet(); renderSpots(); toast('追加しました');
+  };
+}
+function showSpot(sp) {
+  const k = SPOT_KIND[sp.kind] || SPOT_KIND.other;
+  const evs = spotEvents(sp.id), up = upcoming(evs), hist = history(evs);
+  const evRow = e => `<div class="evRow" data-id="${e.id}"><span class="d">${fmtDate(e.date)} ${esc(e.time)}</span><span class="m">${esc(e.member || '')} ${esc(e.memo || '')}</span>${e.done ? '<span class="small">済</span>' : `<button class="ghost evDone">実施した</button>`}<button class="ghost evDel">削除</button></div>`;
+  openSheet(`
+    <h3>${k.emoji} ${esc(sp.name)}</h3>
+    <div class="small">${k.name}${sp.memo ? ' ／ ' + esc(sp.memo) : ''}</div>
+    <h4 style="margin:14px 0 4px">次の予定</h4>
+    ${up.length ? up.map(evRow).join('') : '<div class="small">予定はありません</div>'}
+    <h4 style="margin:14px 0 4px">これまでの実施（${hist.length}回）</h4>
+    ${hist.slice(0, 10).map(evRow).join('') || '<div class="small">まだ記録がありません</div>'}
+    ${hist.length > 10 ? `<div class="small">…ほか${hist.length - 10}回</div>` : ''}
+    <div class="btnRow"><button class="ghost" id="spPlan">＋ 予定を追加</button><button class="primary" id="spDidNow">今日ここで実施した</button></div>
+    <details style="margin-top:10px"><summary class="small">名前・種類を直す／削除</summary>
+      <label>種類<select id="spKind">${Object.entries(SPOT_KIND).map(([kk, v]) => `<option value="${kk}" ${kk === sp.kind ? 'selected' : ''}>${v.emoji} ${v.name}</option>`).join('')}</select></label>
+      <label>名前<input id="spName" type="text" value="${esc(sp.name)}"></label>
+      <label>メモ<input id="spMemo" type="text" value="${esc(sp.memo || '')}"></label>
+      <div class="btnRow"><button class="ghost" id="spDel" style="color:var(--danger)">この場所を削除</button><button class="ghost" id="spEditSave">名前・種類を保存</button></div>
+    </details>
+    <div class="btnRow"><button class="primary" id="spClose">閉じる</button></div>
+  `);
+  $('#spClose').onclick = closeSheet;
+  $('#spPlan').onclick = () => openEventForm(sp, { done: false });
+  $('#spDidNow').onclick = () => openEventForm(sp, { done: true, date: today() });
+  $('#spEditSave').onclick = async () => {
+    const nsp = { ...sp, kind: $('#spKind').value, name: $('#spName').value.trim() || sp.name, memo: $('#spMemo').value.trim() };
+    try { await store.saveSpot(nsp); } catch { return; }
+    S.spots = await store.loadSpots(); renderSpots(); showSpot(S.spots.find(x => x.id === sp.id) || nsp); toast('保存しました');
+  };
+  $('#spDel').onclick = async () => { if (!confirm(`「${sp.name}」を削除しますか？（予定・実績も見えなくなります）`)) return; try { await store.deleteSpot(sp.id); } catch { return; } S.spots = await store.loadSpots(); closeSheet(); renderSpots(); toast('削除しました'); };
+  $('#sheetBody').querySelectorAll('.evDone').forEach(b => b.onclick = async () => { const e = S.events.find(x => x.id === b.closest('.evRow').dataset.id); if (!e) return; try { await store.saveEvent({ ...e, done: true, member: e.member || S.user }); } catch { return; } S.events = await store.loadEvents(); renderSpots(); showSpot(sp); toast('実施済みにしました'); });
+  $('#sheetBody').querySelectorAll('.evDel').forEach(b => b.onclick = async () => { const id = b.closest('.evRow').dataset.id; if (!confirm('この予定／記録を削除しますか？')) return; try { await store.deleteEvent(id); } catch { return; } S.events = await store.loadEvents(); renderSpots(); showSpot(sp); });
+}
+function openEventForm(sp, ev) {
+  const isDone = !!ev.done;
+  openSheet(`
+    <h3>${isDone ? '実施を記録' : '予定を追加'}：${esc(sp.name)}</h3>
+    <label>日付<input id="evDate" type="date" value="${esc(ev.date || today())}"></label>
+    <label>時間（任意）<input id="evTime" type="text" placeholder="例：7:00〜8:00" value="${esc(ev.time || '')}"></label>
+    <label>${isDone ? '実施した人' : '担当（任意）'}<select id="evMember"><option value="">（未定）</option>${S.settings.members.map(m => `<option ${((ev.member || (isDone ? S.user : '')) === m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
+    <label>メモ（任意）<input id="evMemo" type="text" value="${esc(ev.memo || '')}" placeholder="例：新ビラ配布と併せて／反応よかった"></label>
+    <div class="btnRow"><button class="ghost" id="evCancel">やめる</button><button class="primary" id="evSave">保存する</button></div>
+  `);
+  $('#evCancel').onclick = () => showSpot(sp);
+  $('#evSave').onclick = async () => {
+    const e = { id: ev.id || uid(), spot_id: sp.id, date: $('#evDate').value || today(), time: $('#evTime').value.trim(), member: $('#evMember').value, memo: $('#evMemo').value.trim(), done: isDone };
+    try { await store.saveEvent(e); } catch { return; }
+    S.events = await store.loadEvents(); renderSpots(); showSpot(sp); toast('保存しました');
+  };
+}
+function showSpotList() {
+  const name = id => S.spots.find(s => s.id === id)?.name || '(削除済み)';
+  const up = upcoming(S.events), hist = history(S.events);
+  const row = e => `<tr data-spot="${e.spot_id}"><td>${fmtDate(e.date)}</td><td>${esc(e.time)}</td><td>${esc(name(e.spot_id))}</td><td>${esc(e.member || '')}</td><td>${esc(e.memo || '')}</td></tr>`;
+  openSheet(`
+    <h3>辻立ち・活動の予定と実績</h3>
+    <h4 style="margin:10px 0 4px">今後の予定（${up.length}件）</h4>
+    <div class="tableWrap"><table><thead><tr><th>日付</th><th>時間</th><th>場所</th><th>担当</th><th>メモ</th></tr></thead><tbody>${up.map(row).join('') || '<tr><td colspan="5" class="small">予定はありません。地図のピンをタップ →「＋ 予定を追加」</td></tr>'}</tbody></table></div>
+    <h4 style="margin:14px 0 4px">実施済み（${hist.length}件）</h4>
+    <div class="tableWrap"><table><thead><tr><th>日付</th><th>時間</th><th>場所</th><th>実施</th><th>メモ</th></tr></thead><tbody>${hist.map(row).join('') || '<tr><td colspan="5" class="small">まだありません</td></tr>'}</tbody></table></div>
+    <div class="btnRow"><button class="primary" id="slClose">閉じる</button></div>
+  `);
+  $('#slClose').onclick = closeSheet;
+  $('#sheetBody').querySelectorAll('tr[data-spot]').forEach(tr => tr.onclick = () => { const sp = S.spots.find(x => x.id === tr.dataset.spot); if (!sp) return; S.map.panTo({ lat: sp.lat, lng: sp.lng }); showSpot(sp); });
+}
+
 /* ---------------- UI バインド ---------------- */
 function bindUI() {
   $('#periodSel').value = S.filter.period;
@@ -917,6 +1056,11 @@ function bindUI() {
   $('#btnBoardAddCancel').onclick = () => setBoardAdding(false);
   $('#btnBoardList').onclick = showBoardList;
   $('#boardKindSel').onchange = e => { S.boardKindFilter = e.target.value; renderBoards(); };
+  $('#btnSpots').onclick = () => { $('#menu').hidden = true; toggleSpotBar(true); };
+  $('#btnSpotClose').onclick = () => toggleSpotBar(false);
+  $('#btnSpotAdd').onclick = () => { closeSheet(); setSpotAdding(true); };
+  $('#btnSpotAddCancel').onclick = () => setSpotAdding(false);
+  $('#btnSpotList').onclick = showSpotList;
   $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; localStorage.removeItem('cm_user'); showLogin(); };
   $('#sheetHandle').onclick = closeSheet;
   // 地図タップでメニュー・シートを閉じる

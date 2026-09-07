@@ -43,6 +43,14 @@ h1,h2,h3{margin:0 0 8px}
 #drawModes{position:absolute;top:calc(56px + var(--safe-top));left:50%;transform:translateX(-50%);display:flex;background:rgba(15,23,32,.9);border:1px solid var(--border);border-radius:999px;padding:3px}
 .seg{padding:7px 14px;border-radius:999px;font-size:13px;color:var(--muted)}
 .seg.on{background:var(--accent);color:#fff}
+#spotBar{position:absolute;left:0;right:0;top:0;z-index:7;padding:8px 10px;background:linear-gradient(rgba(15,23,32,.92),rgba(15,23,32,.75) 70%,transparent)}
+#spotStat{font-size:13px;font-weight:700;margin-right:auto;background:rgba(15,23,32,.9);padding:6px 10px;border-radius:999px}
+#spotBar .ghost{padding:7px 10px;border-radius:999px;font-size:13px}
+#spotAddHint{margin-top:6px;text-align:center;font-size:13px;background:#0b3a48;color:#9be7f5;border-radius:10px;padding:8px}
+.evRow{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:14px}
+.evRow .d{font-weight:700;min-width:5.5em}
+.evRow .m{color:var(--muted);flex:1}
+.evRow button{padding:4px 8px;border-radius:8px;font-size:12px}
 #boardBar{position:absolute;left:0;right:0;top:0;z-index:7;padding:8px 10px;background:linear-gradient(rgba(15,23,32,.92),rgba(15,23,32,.75) 70%,transparent)}
 .boardBarRow{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 #boardStat{font-size:13px;font-weight:700;margin-right:auto;background:rgba(15,23,32,.9);padding:6px 10px;border-radius:999px}
