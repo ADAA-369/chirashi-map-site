@@ -301,7 +301,18 @@ async function initMap() {
   const loc = document.createElement('button');
   loc.className = 'ghost'; loc.textContent = '◎'; loc.title = '現在地';
   Object.assign(loc.style, { width: '40px', height: '40px', margin: '10px', borderRadius: '8px', fontSize: '20px', background: '#fff', color: '#333', boxShadow: '0 1px 4px rgba(0,0,0,.3)' });
-  loc.onclick = () => navigator.geolocation?.getCurrentPosition(p => { S.map.panTo({ lat: p.coords.latitude, lng: p.coords.longitude }); S.map.setZoom(17); }, () => toast('現在地を取得できませんでした'), { enableHighAccuracy: true, timeout: 8000 });
+  loc.onclick = () => {
+    if (!navigator.geolocation) { toast('この端末では位置情報が使えません'); return; }
+    toast('現在地を取得中…', 8000);
+    const ok = p => { toast('現在地に移動しました', 1500); S.map.panTo({ lat: p.coords.latitude, lng: p.coords.longitude }); S.map.setZoom(17); };
+    const fail = e => {
+      if (e.code === 1) toast('位置情報が許可されていません。iPhoneは「設定 → プライバシー → 位置情報サービス → Safari」で許可してください', 7000);
+      else if (e.code === 2) toast('位置を測れませんでした。屋外か窓際で、Wi-Fiをオンにして再度お試しください', 6000);
+      else toast('時間内に位置を測れませんでした。もう一度押してください', 5000);
+    };
+    // まず高精度で15秒、だめなら低精度でもう一度
+    navigator.geolocation.getCurrentPosition(ok, e => { if (e.code === 1) fail(e); else navigator.geolocation.getCurrentPosition(ok, fail, { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }); }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
+  };
   S.map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(loc);
   $('#zoomIn').onclick = () => S.map.setZoom(S.map.getZoom() + 1);
   $('#zoomOut').onclick = () => S.map.setZoom(S.map.getZoom() - 1);
@@ -942,7 +953,15 @@ function endPinPlace(ok) {
 }
 
 /* ---------------- ポスター掲示場（看板） ---------------- */
-const BOARD_STYLE = { todo: { color: '#9aa7b4', label: '未' }, done: { color: '#3fb950', label: '済' }, check: { color: '#f2a93b', label: '？' } };
+const BOARD_STYLE = {
+  todo:     { color: '#9aa7b4', label: '未', name: '未着手' },
+  reserved: { color: '#60a5fa', label: '予', name: '予約（担当決め済み）' },
+  working:  { color: '#facc15', label: '中', name: '対応中' },
+  done:     { color: '#3fb950', label: '済', name: '完了' },
+  damaged:  { color: '#ef4444', label: '異', name: '異常（破損・剥がれ）' },
+  check:    { color: '#f2a93b', label: '？', name: '要確認' },
+};
+const BOARD_ST_LABEL = k => BOARD_STYLE[k]?.name || k;
 const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: '掲示場', path: () => google.maps.SymbolPath.CIRCLE, scale: 13 }, general: { name: '一般ポスター（支援者宅・店舗など）', short: '一般', path: () => 'M -9,-9 L 9,-9 L 9,9 L -9,9 Z', scale: 1 } };
 S.boardKindFilter = 'all';
 function setLegend(open) { S.legendOpen = open; $('#legend').hidden = !open; $('#legendBtn').classList.toggle('on', open); }
@@ -964,8 +983,9 @@ function renderBoards() {
   for (const m of S.boardMarkers.values()) m.setMap(null);
   S.boardMarkers.clear();
   const off = S.boards.filter(b => (b.kind || 'official') === 'official'), gen = S.boards.filter(b => b.kind === 'general');
-  const cnt = a => `${a.filter(b => b.status === 'done').length}/${a.length}`;
-  $('#boardStat').textContent = `掲示場 ${cnt(off)}　一般ポスター ${cnt(gen)}`;
+  const cnt = a => { const d = a.filter(b => b.status === 'done').length; return `${d}/${a.length}${a.length ? `（${Math.round(d / a.length * 100)}%）` : ''}`; };
+  const bad = S.boards.filter(b => b.status === 'damaged' || b.status === 'check').length;
+  $('#boardStat').textContent = `掲示場 ${cnt(off)}　一般 ${cnt(gen)}${bad ? `　⚠${bad}` : ''}`;
   if (!S.boardsOn) return;
   for (const b of S.boards) {
     const kind = b.kind || 'official';
@@ -1008,12 +1028,10 @@ async function showBoard(b) {
   openSheet(`
     <h3>📌 ${BOARD_KIND[b.kind || 'official'].short} ${esc(b.no)} ${esc(b.place)}</h3>
     <div class="small">${BOARD_KIND[b.kind || 'official'].name}</div>
-    <div class="stTabs">
-      <button data-st="todo" class="${b.status === 'todo' ? 'on' : ''}" style="color:${BOARD_STYLE.todo.color}">未貼付</button>
-      <button data-st="done" class="${b.status === 'done' ? 'on' : ''}" style="color:${BOARD_STYLE.done.color}">貼りました</button>
-      <button data-st="check" class="${b.status === 'check' ? 'on' : ''}" style="color:${BOARD_STYLE.check.color}">要確認</button>
+    <div class="stTabs stTabs6">
+      ${Object.entries(BOARD_STYLE).map(([k, v]) => `<button data-st="${k}" class="${b.status === k ? 'on' : ''}" style="color:${v.color}">${v.label === '未' ? '未着手' : v.label === '予' ? '予約' : v.label === '中' ? '対応中' : v.label === '済' ? '完了' : v.label === '異' ? '異常' : '要確認'}</button>`).join('')}
     </div>
-    <label>貼った人<select id="bBy">${S.settings.members.map(m => `<option ${((b.posted_by || S.user) === m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
+    <label>担当・貼った人<select id="bBy">${S.settings.members.map(m => `<option ${((b.posted_by || S.user) === m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
     <label>日付<input id="bDate" type="date" value="${esc(b.posted_at || today())}"></label>
     <label>写真（任意・自動で縮小します）<input id="bPhoto" type="file" accept="image/*" capture="environment"></label>
     <div class="photoBox" id="bPhotoBox">${b.photo_path ? '<div class="small">写真を読み込み中…</div>' : ''}</div>
@@ -1045,6 +1063,7 @@ async function showBoard(b) {
     $('#bSave').disabled = true;
     const nb = { ...b, status, posted_by: $('#bBy').value, posted_at: $('#bDate').value || today(), memo: $('#bMemo').value.trim(), no: $('#bNo').value.trim(), place: $('#bPlace').value.trim(), kind: $('#bKind').value };
     if (status === 'todo') { nb.posted_by = null; nb.posted_at = null; }
+    if (status === 'reserved') { nb.posted_at = null; }
     if (newBlob) { const path = await store.uploadPhoto(newBlob, b.id); if (!path) { $('#bSave').disabled = false; return; } nb.photo_path = path; }
     try { await store.saveBoard(nb); } catch { $('#bSave').disabled = false; return; }
     S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast('保存しました');
@@ -1065,19 +1084,22 @@ function shrinkImage(file, maxSide, quality) {
 }
 function showBoardList() {
   const rows = [...S.boards].sort((a, b) => ((a.kind || 'official') === 'official' ? 0 : 1) - ((b.kind || 'official') === 'official' ? 0 : 1) || (parseInt(a.no) || 9999) - (parseInt(b.no) || 9999) || String(a.no).localeCompare(String(b.no)));
-  const sum = k => { const a = rows.filter(b => (b.kind || 'official') === k); return `${BOARD_KIND[k].short} ${a.filter(b => b.status === 'done').length}/${a.length}（要確認 ${a.filter(b => b.status === 'check').length}）`; };
+  const sum = k => { const a = rows.filter(b => (b.kind || 'official') === k); const d = a.filter(b => b.status === 'done').length; return `${BOARD_KIND[k].short} ${d}/${a.length}${a.length ? `＝${Math.round(d / a.length * 100)}%` : ''}（異常${a.filter(b => b.status === 'damaged').length}・要確認${a.filter(b => b.status === 'check').length}）`; };
   openSheet(`
     <h3>ポスター一覧</h3>
     <div class="small">${sum('official')} ／ ${sum('general')}</div>
-    <div class="tableWrap"><table><thead><tr><th>種類</th><th>番号</th><th>場所</th><th>状態</th><th>貼った人</th><th>日付</th><th>写真</th></tr></thead><tbody>
-    ${rows.map(b => `<tr data-id="${b.id}"><td>${BOARD_KIND[b.kind || 'official'].short}</td><td>${esc(b.no)}</td><td>${esc(b.place)}</td><td style="color:${BOARD_STYLE[b.status]?.color}">${{ todo: '未貼付', done: '貼付済', check: '要確認' }[b.status] || ''}</td><td>${esc(b.posted_by || '')}</td><td>${b.posted_at ? fmtDate(b.posted_at) : ''}</td><td>${b.photo_path ? '📷' : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="small">まだ登録がありません。「＋ 場所を追加」で地図に置いてください</td></tr>'}
+    <div class="stTabs"><button id="blAll" class="${S.boardListOnlyOpen ? '' : 'on'}">すべて</button><button id="blOpen" class="${S.boardListOnlyOpen ? 'on' : ''}">未完了だけ</button></div>
+    <div class="tableWrap"><table><thead><tr><th>種類</th><th>番号</th><th>場所</th><th>状態</th><th>担当</th><th>日付</th><th>写真</th></tr></thead><tbody>
+    ${rows.filter(b => !S.boardListOnlyOpen || b.status !== 'done').map(b => `<tr data-id="${b.id}"><td>${BOARD_KIND[b.kind || 'official'].short}</td><td>${esc(b.no)}</td><td>${esc(b.place)}</td><td style="color:${BOARD_STYLE[b.status]?.color}">${BOARD_ST_LABEL(b.status)}</td><td>${esc(b.posted_by || '')}</td><td>${b.posted_at ? fmtDate(b.posted_at) : ''}</td><td>${b.photo_path ? '📷' : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="small">まだ登録がありません。「＋ 場所を追加」で地図に置いてください</td></tr>'}
     </tbody></table></div>
     <div class="btnRow"><button class="ghost" id="blCsv">CSV</button><button class="primary" id="blClose">閉じる</button></div>
   `);
   $('#blClose').onclick = closeSheet;
+  $('#blAll').onclick = () => { S.boardListOnlyOpen = false; showBoardList(); };
+  $('#blOpen').onclick = () => { S.boardListOnlyOpen = true; showBoardList(); };
   $('#blCsv').onclick = () => {
     const head = ['種類', '番号', '場所', '状態', '貼った人', '日付', '緯度', '経度', 'メモ'];
-    const data = rows.map(b => [BOARD_KIND[b.kind || 'official'].short, b.no, b.place, { todo: '未貼付', done: '貼付済', check: '要確認' }[b.status] || '', b.posted_by || '', b.posted_at || '', b.lat, b.lng, b.memo || '']);
+    const data = rows.map(b => [BOARD_KIND[b.kind || 'official'].short, b.no, b.place, BOARD_ST_LABEL(b.status), b.posted_by || '', b.posted_at || '', b.lat, b.lng, b.memo || '']);
     const csv = '﻿' + [head, ...data].map(a => a.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `ポスター_${today()}.csv`; a.click();
   };
