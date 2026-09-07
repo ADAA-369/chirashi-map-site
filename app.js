@@ -37,6 +37,12 @@ const LocalStore = {
   },
   async saveSettings(s) { localStorage.setItem(this.skey, JSON.stringify(s)); },
   subscribe() { /* 端末内保存は他端末からの更新なし */ },
+  bkey: 'cm_boards_v1',
+  async loadBoards() { try { return JSON.parse(localStorage.getItem(this.bkey) || '[]'); } catch { return []; } },
+  async saveBoard(b) { const a = await this.loadBoards(); const i = a.findIndex(x => x.id === b.id); if (i >= 0) a[i] = b; else a.push(b); localStorage.setItem(this.bkey, JSON.stringify(a)); },
+  async deleteBoard(id) { localStorage.setItem(this.bkey, JSON.stringify((await this.loadBoards()).filter(x => x.id !== id))); },
+  async uploadPhoto() { toast('端末内保存版では写真を保存できません'); return null; },
+  async photoUrl() { return null; },
 };
 /* ---------------- 保存アダプタ（Supabase 共有） ---------------- */
 const SupabaseStore = {
@@ -76,14 +82,39 @@ const SupabaseStore = {
     const { error } = await this.client.from('settings').upsert({ id: 'main', data: { flyers, members, noticeDate, cities }, updated_at: new Date().toISOString() });
     if (error) { console.error(error); toast('設定の保存に失敗しました（通信）'); }
   },
+  async loadBoards() {
+    const { data, error } = await this.client.from('boards').select('*').eq('deleted', false).order('no');
+    if (error) { console.error(error); return S.boards || []; }
+    return data;
+  },
+  async saveBoard(b) {
+    const row = { id: b.id, kind: b.kind || 'official', no: b.no || '', place: b.place || '', lat: b.lat, lng: b.lng, status: b.status || 'todo', posted_by: b.posted_by || null, posted_at: b.posted_at || null, photo_path: b.photo_path || null, memo: b.memo || '', updated_at: new Date().toISOString() };
+    const { error } = await this.client.from('boards').upsert(row);
+    if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; }
+  },
+  async deleteBoard(id) {
+    const { error } = await this.client.from('boards').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; }
+  },
+  async uploadPhoto(blob, boardId) {
+    const path = `${boardId}/${Date.now()}.jpg`;
+    const { error } = await this.client.storage.from('posters').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+    if (error) { console.error(error); toast('写真の保存に失敗しました'); return null; }
+    return path;
+  },
+  async photoUrl(path) {
+    if (!path) return null;
+    const { data, error } = await this.client.storage.from('posters').createSignedUrl(path, 3600);
+    return error ? null : data.signedUrl;
+  },
   // 15秒ごと＋画面復帰時に他の人の更新を取り込む
   subscribe(cb) {
     const tick = async () => {
       if (document.hidden || S.drawing || S.adjust) return;
       try {
-        const [recs, sets] = await Promise.all([this.loadRecords(), this.loadSettings()]);
-        const j = JSON.stringify([recs, sets]);
-        if (j !== this._lastJson) { this._lastJson = j; cb(recs, sets); }
+        const [recs, sets, boards] = await Promise.all([this.loadRecords(), this.loadSettings(), this.loadBoards()]);
+        const j = JSON.stringify([recs, sets, boards]);
+        if (j !== this._lastJson) { this._lastJson = j; cb(recs, sets, boards); }
       } catch { }
     };
     this._timer = setInterval(tick, 15000);
@@ -100,11 +131,13 @@ const S = window.S = {
   settings: null, records: [], user: null,
   filter: { period: '30', flyers: new Set() },
   polys: new Map(),      // record.id -> google.maps.Polygon
+  labels: [],
   overlapPolys: [],
   towns: [],             // {feature, id, name, city, setai, area}
   townFeatures: new Map(), // data feature id -> town
   infoWin: null,
   drawing: null,
+  boards: [], boardMarkers: new Map(), boardsOn: false, boardAdding: false,
 };
 
 const $ = s => document.querySelector(s);
@@ -123,14 +156,14 @@ window.addEventListener('unhandledrejection', e => { console.error(e.reason); to
 async function init() {
   bindUI();
   await login();                       // 合言葉の検証と名前の選択（設定はこの中で読み込む）
-  S.records = await store.loadRecords();
+  [S.records, S.boards] = await Promise.all([store.loadRecords(), store.loadBoards()]);
   S.filter.flyers = new Set(S.settings.flyers.map(f => f.id));
   await loadGoogleMaps();
   await initMap();
   await loadTowns();
   renderAll();
-  store.subscribe((recs, sets) => {
-    S.records = recs;
+  store.subscribe((recs, sets, boards) => {
+    S.records = recs; if (boards) S.boards = boards;
     if (sets) { S.settings = { ...S.settings, ...sets }; for (const f of S.settings.flyers) if (!S.filter.flyers.has(f.id) && !S._userToggled) S.filter.flyers.add(f.id); }
     renderAll();
   });
@@ -225,9 +258,11 @@ async function initMap() {
   Object.assign(loc.style, { width: '40px', height: '40px', margin: '10px', borderRadius: '8px', fontSize: '20px', background: '#fff', color: '#333', boxShadow: '0 1px 4px rgba(0,0,0,.3)' });
   loc.onclick = () => navigator.geolocation?.getCurrentPosition(p => { S.map.panTo({ lat: p.coords.latitude, lng: p.coords.longitude }); S.map.setZoom(17); }, () => toast('現在地を取得できませんでした'), { enableHighAccuracy: true, timeout: 8000 });
   S.map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(loc);
+  S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); });
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
     styleTowns();
+    const z = S.map.getZoom(); if (S._lastZoom !== undefined && (z >= 15) !== (S._lastZoom >= 15)) renderRecords(); S._lastZoom = z;
   });
 }
 
@@ -289,6 +324,25 @@ function estimateRecord(poly) {
   return { setai: Math.round(setai), town: best ? `${best.city} ${best.name}` : '' };
 }
 
+/* ---------------- 記録のラベル（ポリゴン内に常時表示） ---------------- */
+let RecLabel = null;
+function ensureLabelClass() {
+  if (RecLabel) return;
+  RecLabel = class extends google.maps.OverlayView {
+    constructor(pos, html, color) { super(); this.pos = pos; this.html = html; this.color = color; this.div = null; }
+    onAdd() {
+      const d = document.createElement('div'); d.className = 'recLabel'; d.style.borderColor = this.color; d.innerHTML = this.html;
+      this.div = d; this.getPanes().overlayLayer.appendChild(d);   // クリックはポリゴンへ通す
+    }
+    draw() {
+      if (!this.div) return;
+      const p = this.getProjection().fromLatLngToDivPixel(new google.maps.LatLng(this.pos.lat, this.pos.lng));
+      this.div.style.left = p.x + 'px'; this.div.style.top = p.y + 'px';
+    }
+    onRemove() { this.div?.remove(); this.div = null; }
+  };
+}
+
 /* ---------------- 記録の描画 ---------------- */
 const recPolygon = r => turf.polygon([r.polygon]);
 
@@ -300,12 +354,16 @@ function filteredRecords() {
 }
 
 function renderAll() {
-  renderChips(); renderNotice(); renderLegend(); renderRecords();
+  renderChips(); renderNotice(); renderLegend(); renderRecords(); renderBoards();
 }
 
 function renderRecords() {
+  ensureLabelClass();
   for (const p of S.polys.values()) p.setMap(null);
   S.polys.clear();
+  for (const l of S.labels) l.setMap(null);
+  S.labels = [];
+  const showLabels = S.map.getZoom() >= 15;
   for (const p of S.overlapPolys) p.setMap(null);
   S.overlapPolys = [];
   const recs = filteredRecords();
@@ -318,6 +376,11 @@ function renderRecords() {
     });
     poly.addListener('click', ev => { if (!S.drawing) showRecord(r, ev.latLng); });
     S.polys.set(r.id, poly);
+    if (showLabels) {
+      const c = turf.centerOfMass(recPolygon(r)).geometry.coordinates;
+      const html = `<b>${fmtDate(r.date)}</b> ${esc(r.member)}<br>${esc(f.name)} <b>${r.count.toLocaleString()}</b>枚`;
+      const lb = new RecLabel({ lat: c[1], lng: c[0] }, html, f.color); lb.setMap(S.map); S.labels.push(lb);
+    }
   }
   // 同じチラシ同士の重なりを赤で表示
   const byFlyer = {};
@@ -363,9 +426,15 @@ function renderChips() {
     };
   });
 }
+function flyerTotals() {
+  // 全期間の配布合計（期間フィルタに関係なく残り枚数を出す）
+  const used = {}; for (const r of S.records) used[r.flyer_id] = (used[r.flyer_id] || 0) + (r.count || 0);
+  return S.settings.flyers.map(f => ({ ...f, used: used[f.id] || 0, remain: f.total ? f.total - (used[f.id] || 0) : null }));
+}
 function renderLegend() {
   const n = filteredRecords().length;
-  $('#legend').innerHTML = `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="small">表示中 ${n}件</div>`;
+  const stock = flyerTotals().filter(f => S.filter.flyers.has(f.id)).map(f => `<div class="lg"><span class="sw" style="background:${f.color};border-color:${f.color}"></span><span>${esc(f.name)} ${f.used.toLocaleString()}${f.total ? ` / ${f.total.toLocaleString()}枚　<b style="color:${f.remain < 0 ? '#ff7b72' : '#e8eef5'}">残り ${f.remain.toLocaleString()}</b>` : '枚'}</span></div>`).join('');
+  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="small">表示中 ${n}件</div>`;
 }
 function renderNotice() {
   const b = $('#noticeBanner'); const nd = S.settings.noticeDate;
@@ -602,6 +671,7 @@ function showList() {
   openSheet(`
     <h3>配布一覧（表示中の条件）</h3>
     <div class="small">${recs.length}件 ／ 合計 ${total.toLocaleString()}枚 ／ ${Object.entries(byF).map(([k, v]) => `${esc(flyerOf(k).name)} ${v.toLocaleString()}枚`).join('・')}</div>
+    <div class="small" style="margin-top:4px">残り枚数（全期間）：${flyerTotals().map(f => `${esc(f.name)} ${f.total ? `${f.remain.toLocaleString()} / ${f.total.toLocaleString()}` : `配布 ${f.used.toLocaleString()}（用意枚数は未設定）`}`).join('・')}</div>
     <div class="tableWrap"><table><thead><tr><th>日付</th><th>配った人</th><th>チラシ</th><th>部数</th><th>主な町丁目</th></tr></thead><tbody>
     ${recs.map(r => `<tr data-id="${r.id}"><td>${fmtDate(r.date)}</td><td>${esc(r.member)}</td><td><span style="color:${flyerOf(r.flyer_id).color}">●</span> ${esc(flyerOf(r.flyer_id).name)}</td><td>${r.count}</td><td>${esc(r.town || '')}</td></tr>`).join('')}
     </tbody></table></div>
@@ -649,6 +719,7 @@ function showSettings() {
   openSheet(`
     <h3>設定</h3>
     <h4 style="margin:12px 0 4px">チラシの種類</h4>
+    <div class="small">色／名前／用意した枚数（入れると残り枚数が出ます）</div>
     <div id="flyerRows">${s.flyers.map(f => flyerRow(f)).join('')}</div>
     <button class="ghost" id="addFlyer" style="padding:8px 12px;border-radius:8px;margin-top:6px">＋ チラシを追加</button>
     <h4 style="margin:18px 0 4px">メンバー（配る人）</h4>
@@ -666,7 +737,7 @@ function showSettings() {
   bindFlyerRows();
   $('#sCancel').onclick = closeSheet;
   $('#sSave').onclick = async () => {
-    const flyers = [...$('#flyerRows').querySelectorAll('.rowItem')].map(r => ({ id: r.dataset.id, name: r.querySelector('input[type=text]').value.trim(), color: r.querySelector('input[type=color]').value })).filter(f => f.name);
+    const flyers = [...$('#flyerRows').querySelectorAll('.rowItem')].map(r => ({ id: r.dataset.id, name: r.querySelector('input[type=text]').value.trim(), color: r.querySelector('input[type=color]').value, total: Number(r.querySelector('.totalInp').value) || 0 })).filter(f => f.name);
     if (!flyers.length) { toast('チラシを1つ以上登録してください'); return; }
     s.flyers = flyers;
     s.members = $('#sMembers').value.split('\n').map(x => x.trim()).filter(Boolean);
@@ -675,13 +746,150 @@ function showSettings() {
     for (const f of flyers) S.filter.flyers.add(f.id);
     closeSheet(); renderAll(); toast('設定を保存しました');
   };
-  function flyerRow(f) { return `<div class="rowItem" data-id="${f.id}"><input type="color" value="${f.color}"><input type="text" value="${esc(f.name)}" placeholder="例：政策ビラ第2号"><span class="orderBtns"><button class="icon upFlyer" title="上へ">▲</button><button class="icon downFlyer" title="下へ">▼</button></span><button class="icon delFlyer">🗑</button></div>`; }
+  function flyerRow(f) { return `<div class="rowItem" data-id="${f.id}"><input type="color" value="${f.color}"><input type="text" value="${esc(f.name)}" placeholder="例：政策ビラ第2号"><input type="number" class="totalInp" inputmode="numeric" min="0" placeholder="用意枚数" value="${f.total ?? ''}" title="用意した枚数（残り枚数の計算用）"><span class="orderBtns"><button class="icon upFlyer" title="上へ">▲</button><button class="icon downFlyer" title="下へ">▼</button></span><button class="icon delFlyer">🗑</button></div>`; }
   function bindFlyerRows() {
     const rows = $('#flyerRows');
     rows.querySelectorAll('.delFlyer').forEach(b => b.onclick = () => { if (confirm('このチラシを削除しますか？（記録は残ります）')) b.closest('.rowItem').remove(); });
     rows.querySelectorAll('.upFlyer').forEach(b => b.onclick = () => { const r = b.closest('.rowItem'); if (r.previousElementSibling) rows.insertBefore(r, r.previousElementSibling); });
     rows.querySelectorAll('.downFlyer').forEach(b => b.onclick = () => { const r = b.closest('.rowItem'); if (r.nextElementSibling) rows.insertBefore(r.nextElementSibling, r); });
   }
+}
+
+
+/* ---------------- ポスター掲示場（看板） ---------------- */
+const BOARD_STYLE = { todo: { color: '#9aa7b4', label: '未' }, done: { color: '#3fb950', label: '済' }, check: { color: '#f2a93b', label: '？' } };
+const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: '掲示場', path: () => google.maps.SymbolPath.CIRCLE, scale: 13 }, general: { name: '一般ポスター（支援者宅・店舗など）', short: '一般', path: () => 'M -9,-9 L 9,-9 L 9,9 L -9,9 Z', scale: 1 } };
+S.boardKindFilter = 'all';
+function toggleBoards(on) {
+  S.boardsOn = on ?? !S.boardsOn;
+  $('#boardBar').hidden = !S.boardsOn;
+  $('#legend').hidden = S.boardsOn;
+  if (!S.boardsOn) { setBoardAdding(false); S.infoWin.close(); }
+  renderBoards();
+}
+function setBoardAdding(on) {
+  S.boardAdding = on;
+  $('#boardAddHint').hidden = !on;
+  S.map.setOptions({ draggableCursor: on ? 'crosshair' : null });
+  S.map.data.setStyle(s => ({ ...boardsBaseTownStyle(), clickable: !on && S.map.getZoom() >= 14 }));
+}
+function boardsBaseTownStyle() { const z = S.map.getZoom(); return { visible: z >= 14, strokeColor: '#ffffff', strokeOpacity: z >= 16 ? 0.55 : 0.35, strokeWeight: 1, fillOpacity: 0, zIndex: 1 }; }
+function renderBoards() {
+  for (const m of S.boardMarkers.values()) m.setMap(null);
+  S.boardMarkers.clear();
+  const off = S.boards.filter(b => (b.kind || 'official') === 'official'), gen = S.boards.filter(b => b.kind === 'general');
+  const cnt = a => `${a.filter(b => b.status === 'done').length}/${a.length}`;
+  $('#boardStat').textContent = `掲示場 ${cnt(off)}　一般ポスター ${cnt(gen)}`;
+  if (!S.boardsOn) return;
+  for (const b of S.boards) {
+    const kind = b.kind || 'official';
+    if (S.boardKindFilter !== 'all' && kind !== S.boardKindFilter) continue;
+    const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo; const k = BOARD_KIND[kind];
+    const m = new google.maps.Marker({
+      position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20,
+      icon: { path: k.path(), scale: k.scale, fillColor: st.color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2.5, anchor: kind === 'general' ? new google.maps.Point(0, 0) : undefined },
+      label: { text: b.no ? String(b.no) : st.label, color: '#0b1a24', fontSize: '12px', fontWeight: '700' },
+      title: `${b.no ? b.no + ' ' : ''}${b.place || ''}`,
+    });
+    m.addListener('click', () => { if (!S.boardAdding) showBoard(b); });
+    S.boardMarkers.set(b.id, m);
+  }
+}
+async function addBoardAt(latLng) {
+  setBoardAdding(false);
+  const kind = S.boardKindFilter === 'general' ? 'general' : 'official';
+  const sameKind = S.boards.filter(x => (x.kind || 'official') === kind);
+  const b = { id: uid(), kind, no: String(sameKind.length + 1), place: '', lat: +latLng.lat().toFixed(6), lng: +latLng.lng().toFixed(6), status: 'todo', memo: '' };
+  openSheet(`
+    <h3>ポスターの場所を追加</h3>
+    <label>種類<select id="bKind"><option value="official" ${kind === 'official' ? 'selected' : ''}>選挙用ポスター掲示場（告示後に貼る公営の看板）</option><option value="general" ${kind === 'general' ? 'selected' : ''}>一般ポスター（支援者宅・店舗などに貼る）</option></select></label>
+    <label>番号（掲示場一覧の番号・任意）<input id="bNo" type="text" inputmode="numeric" value="${esc(b.no)}"></label>
+    <label>場所（目印）<input id="bPlace" type="text" placeholder="例：蟹江小学校 正門横／○○商店の壁"></label>
+    <div class="btnRow"><button class="ghost" id="bCancel">やめる</button><button class="primary" id="bSave">追加する</button></div>
+  `);
+  $('#bCancel').onclick = closeSheet;
+  $('#bSave').onclick = async () => {
+    b.no = $('#bNo').value.trim(); b.place = $('#bPlace').value.trim(); b.kind = $('#bKind').value;
+    try { await store.saveBoard(b); } catch { return; }
+    S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast('掲示場を追加しました');
+  };
+}
+async function showBoard(b) {
+  const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
+  openSheet(`
+    <h3>📌 ${BOARD_KIND[b.kind || 'official'].short} ${esc(b.no)} ${esc(b.place)}</h3>
+    <div class="small">${BOARD_KIND[b.kind || 'official'].name}</div>
+    <div class="stTabs">
+      <button data-st="todo" class="${b.status === 'todo' ? 'on' : ''}" style="color:${BOARD_STYLE.todo.color}">未貼付</button>
+      <button data-st="done" class="${b.status === 'done' ? 'on' : ''}" style="color:${BOARD_STYLE.done.color}">貼りました</button>
+      <button data-st="check" class="${b.status === 'check' ? 'on' : ''}" style="color:${BOARD_STYLE.check.color}">要確認</button>
+    </div>
+    <label>貼った人<select id="bBy">${S.settings.members.map(m => `<option ${((b.posted_by || S.user) === m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
+    <label>日付<input id="bDate" type="date" value="${esc(b.posted_at || today())}"></label>
+    <label>写真（任意・自動で縮小します）<input id="bPhoto" type="file" accept="image/*" capture="environment"></label>
+    <div class="photoBox" id="bPhotoBox">${b.photo_path ? '<div class="small">写真を読み込み中…</div>' : ''}</div>
+    <label>メモ（例：破損あり、貼る位置が高い）<input id="bMemo" type="text" value="${esc(b.memo || '')}"></label>
+    <details style="margin-top:10px"><summary class="small">種類・番号・場所を直す／削除</summary>
+      <label>種類<select id="bKind"><option value="official" ${(b.kind || 'official') === 'official' ? 'selected' : ''}>選挙用ポスター掲示場</option><option value="general" ${b.kind === 'general' ? 'selected' : ''}>一般ポスター</option></select></label>
+      <label>番号<input id="bNo" type="text" value="${esc(b.no)}"></label>
+      <label>場所<input id="bPlace" type="text" value="${esc(b.place)}"></label>
+      <button class="ghost" id="bDel" style="margin-top:8px;padding:8px 12px;border-radius:8px;color:var(--danger)">この掲示場を削除</button>
+    </details>
+    <div class="btnRow"><button class="ghost" id="bCancel">閉じる</button><button class="primary" id="bSave">保存する</button></div>
+  `);
+  let status = b.status;
+  $('#sheetBody').querySelectorAll('.stTabs button').forEach(btn => btn.onclick = () => { status = btn.dataset.st; $('#sheetBody').querySelectorAll('.stTabs button').forEach(x => x.classList.toggle('on', x === btn)); });
+  if (b.photo_path) { const url = await store.photoUrl(b.photo_path); $('#bPhotoBox').innerHTML = url ? `<img src="${url}" alt="貼付写真">` : '<div class="small">写真を表示できません</div>'; }
+  let newBlob = null;
+  $('#bPhoto').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    newBlob = await shrinkImage(f, 1280, 0.8);
+    $('#bPhotoBox').innerHTML = `<img src="${URL.createObjectURL(newBlob)}" alt="プレビュー"><div class="small">約${Math.round(newBlob.size / 1024)}KB（保存で確定）</div>`;
+    if (status === 'todo') { status = 'done'; $('#sheetBody').querySelectorAll('.stTabs button').forEach(x => x.classList.toggle('on', x.dataset.st === 'done')); }
+  };
+  $('#bCancel').onclick = closeSheet;
+  $('#bDel').onclick = async () => { if (!confirm(`掲示場 ${b.no} を削除しますか？`)) return; try { await store.deleteBoard(b.id); } catch { return; } S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast('削除しました'); };
+  $('#bSave').onclick = async () => {
+    $('#bSave').disabled = true;
+    const nb = { ...b, status, posted_by: $('#bBy').value, posted_at: $('#bDate').value || today(), memo: $('#bMemo').value.trim(), no: $('#bNo').value.trim(), place: $('#bPlace').value.trim(), kind: $('#bKind').value };
+    if (status === 'todo') { nb.posted_by = null; nb.posted_at = null; }
+    if (newBlob) { const path = await store.uploadPhoto(newBlob, b.id); if (path) nb.photo_path = path; }
+    try { await store.saveBoard(nb); } catch { $('#bSave').disabled = false; return; }
+    S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast('保存しました');
+  };
+}
+function shrinkImage(file, maxSide, quality) {
+  return new Promise(resolve => {
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const r = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * r); c.height = Math.round(img.height * r);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob(b => { URL.revokeObjectURL(url); resolve(b || file); }, 'image/jpeg', quality);
+    };
+    img.onerror = () => resolve(file);
+    img.src = url;
+  });
+}
+function showBoardList() {
+  const rows = [...S.boards].sort((a, b) => ((a.kind || 'official') === 'official' ? 0 : 1) - ((b.kind || 'official') === 'official' ? 0 : 1) || (parseInt(a.no) || 9999) - (parseInt(b.no) || 9999) || String(a.no).localeCompare(String(b.no)));
+  const sum = k => { const a = rows.filter(b => (b.kind || 'official') === k); return `${BOARD_KIND[k].short} ${a.filter(b => b.status === 'done').length}/${a.length}（要確認 ${a.filter(b => b.status === 'check').length}）`; };
+  openSheet(`
+    <h3>ポスター一覧</h3>
+    <div class="small">${sum('official')} ／ ${sum('general')}</div>
+    <div class="tableWrap"><table><thead><tr><th>種類</th><th>番号</th><th>場所</th><th>状態</th><th>貼った人</th><th>日付</th><th>写真</th></tr></thead><tbody>
+    ${rows.map(b => `<tr data-id="${b.id}"><td>${BOARD_KIND[b.kind || 'official'].short}</td><td>${esc(b.no)}</td><td>${esc(b.place)}</td><td style="color:${BOARD_STYLE[b.status]?.color}">${{ todo: '未貼付', done: '貼付済', check: '要確認' }[b.status] || ''}</td><td>${esc(b.posted_by || '')}</td><td>${b.posted_at ? fmtDate(b.posted_at) : ''}</td><td>${b.photo_path ? '📷' : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="small">まだ登録がありません。「＋ 場所を追加」で地図に置いてください</td></tr>'}
+    </tbody></table></div>
+    <div class="btnRow"><button class="ghost" id="blCsv">CSV</button><button class="primary" id="blClose">閉じる</button></div>
+  `);
+  $('#blClose').onclick = closeSheet;
+  $('#blCsv').onclick = () => {
+    const head = ['種類', '番号', '場所', '状態', '貼った人', '日付', '緯度', '経度', 'メモ'];
+    const data = rows.map(b => [BOARD_KIND[b.kind || 'official'].short, b.no, b.place, { todo: '未貼付', done: '貼付済', check: '要確認' }[b.status] || '', b.posted_by || '', b.posted_at || '', b.lat, b.lng, b.memo || '']);
+    const csv = '﻿' + [head, ...data].map(a => a.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `ポスター_${today()}.csv`; a.click();
+  };
+  $('#sheetBody').querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => { const b = S.boards.find(x => x.id === tr.dataset.id); if (!b) return; S.map.panTo({ lat: b.lat, lng: b.lng }); showBoard(b); });
 }
 
 /* ---------------- UI バインド ---------------- */
@@ -703,6 +911,12 @@ function bindUI() {
     $('#menu').hidden = true;
     ({ list: showList, towns: showTownTable, settings: showSettings })[b.dataset.view]();
   });
+  $('#btnBoards').onclick = () => { $('#menu').hidden = true; toggleBoards(true); };
+  $('#btnBoardClose').onclick = () => toggleBoards(false);
+  $('#btnBoardAdd').onclick = () => { closeSheet(); setBoardAdding(true); };
+  $('#btnBoardAddCancel').onclick = () => setBoardAdding(false);
+  $('#btnBoardList').onclick = showBoardList;
+  $('#boardKindSel').onchange = e => { S.boardKindFilter = e.target.value; renderBoards(); };
   $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; localStorage.removeItem('cm_user'); showLogin(); };
   $('#sheetHandle').onclick = closeSheet;
   // 地図タップでメニュー・シートを閉じる
