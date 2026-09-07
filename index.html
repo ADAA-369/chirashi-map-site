@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#1e3a5f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>チラシ配布マップ</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="配布マップ">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- 上部バー -->
+  <header id="topbar">
+    <div class="row">
+      <button id="btnMenu" class="icon" aria-label="メニュー">☰</button>
+      <div id="title">チラシ配布マップ</div>
+      <select id="periodSel" aria-label="期間">
+        <option value="all">全期間</option>
+        <option value="30" selected>直近30日</option>
+        <option value="7">直近7日</option>
+      </select>
+    </div>
+    <div id="flyerChips" class="chips"></div>
+  </header>
+
+  <div id="noticeBanner" hidden></div>
+
+  <!-- 地図 -->
+  <div id="map"></div>
+
+  <!-- なぞり描きレイヤー -->
+  <div id="drawLayer" hidden>
+    <canvas id="drawCanvas"></canvas>
+    <div id="drawHint">配った範囲を指でなぞって囲んでください</div>
+    <div id="drawButtons">
+      <button id="btnDrawCancel" class="ghost">やめる</button>
+      <button id="btnDrawRedo" class="ghost">描き直す</button>
+      <button id="btnDrawDone" class="primary" disabled>これで決定</button>
+    </div>
+  </div>
+
+  <!-- 記録ボタン -->
+  <button id="fab">＋ 配布を記録</button>
+
+  <!-- 凡例 -->
+  <div id="legend"></div>
+
+  <!-- サイドメニュー -->
+  <nav id="menu" hidden>
+    <div class="menuHead">
+      <div id="menuUser"></div>
+      <button id="btnMenuClose" class="icon">✕</button>
+    </div>
+    <button class="menuItem" data-view="list">📋 配布一覧・CSV</button>
+    <button class="menuItem" data-view="towns">🏘 町丁目ごとの配布率</button>
+    <button class="menuItem" data-view="settings">⚙ 設定（チラシ・メンバー・告示日）</button>
+    <button class="menuItem" id="btnSwitchUser">👤 名前を変える</button>
+    <div class="menuFoot">
+      地図 © Google ／ 町丁目境界・世帯数：政府統計の総合窓口(e-Stat) 令和2年国勢調査 小地域境界データを加工
+    </div>
+  </nav>
+
+  <!-- ボトムシート（汎用） -->
+  <div id="sheet" hidden>
+    <div id="sheetHandle"></div>
+    <div id="sheetBody"></div>
+  </div>
+
+  <!-- ログイン -->
+  <div id="login" hidden>
+    <div class="loginBox">
+      <h1>チラシ配布マップ</h1>
+      <p id="loginMsg">あなたの名前を選んでください</p>
+      <div id="loginPass" hidden>
+        <label>合言葉<input id="inpPass" type="password" autocomplete="off"></label>
+      </div>
+      <label>名前<select id="selName"></select></label>
+      <label id="newNameWrap" hidden>新しい名前<input id="inpNewName" type="text" placeholder="例：野口"></label>
+      <button id="btnLogin" class="primary">はじめる</button>
+      <p class="loginErr" id="loginErr"></p>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+</div>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
