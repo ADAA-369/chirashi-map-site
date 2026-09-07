@@ -1072,7 +1072,20 @@ async function runSearch() {
     if ((t.city + t.name).includes(qn) || t.name.includes(qn)) items.push({ ico: '🏘', name: `${t.city} ${t.name}`, sub: `町丁目 ／ ${t.setai.toLocaleString()}世帯`, lat: t.feature.properties.Y_CODE, lng: t.feature.properties.X_CODE, zoom: 16 });
     if (items.length >= 8) break;
   }
-  // 2) 国土地理院の住所・施設検索（無料・キー不要）。愛知県周辺を優先
+  // 2) Google Places（店名・施設名。Places API (New) が有効な場合だけ）
+  if (!S._placesDenied) {
+    try {
+      const { Place } = await google.maps.importLibrary('places');
+      const { places } = await Place.searchByText({ textQuery: q, fields: ['displayName', 'location', 'formattedAddress', 'primaryTypeDisplayName'], language: 'ja', region: 'jp', maxResultCount: 6,
+        locationBias: new google.maps.LatLngBounds({ lat: 35.05, lng: 136.65 }, { lat: 35.25, lng: 136.95 }) });
+      for (const pl of places || []) {
+        if (!pl.location) continue;
+        const addr = (pl.formattedAddress || '').replace(/^日本、?/, '').replace(/^〒\d{3}-\d{4}\s*/, '');
+        items.push({ ico: '🏪', name: pl.displayName || addr, sub: `${pl.primaryTypeDisplayName || '店舗・施設'}（Google）／ ${addr}`, lat: pl.location.lat(), lng: pl.location.lng(), zoom: 18 });
+      }
+    } catch (e) { console.warn('Places search unavailable', e); S._placesDenied = true; S._placesError = String(e?.message || e); }
+  }
+  // 3) 国土地理院の住所・施設検索（無料・キー不要）。愛知県周辺を優先
   const inAichi = (lat, lng) => lat > 34.5 && lat < 35.5 && lng > 136.5 && lng < 138.0;
   try {
     const d = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(q)).then(r => r.json());
@@ -1084,7 +1097,7 @@ async function runSearch() {
     }
     items.push(...near.slice(0, 6), ...far.slice(0, 2));
   } catch (e) { console.warn('GSI search failed', e); }
-  // 3) Google の住所検索（Geocoding API が有効な場合だけ）
+  // 4) Google の住所検索（Geocoding API が有効な場合だけ）
   if (!S._geocoderDenied) {
     try {
       const { Geocoder } = await google.maps.importLibrary('geocoding');
@@ -1099,7 +1112,7 @@ async function runSearch() {
       }
     } catch (e) { if (e && e.code === 'REQUEST_DENIED') S._geocoderDenied = true; else console.warn(e); }
   }
-  if (!items.length) { box.innerHTML = '<div class="small" style="padding:8px">見つかりませんでした。町名だけ、施設名だけ、など言い方を変えてみてください</div>'; return; }
+  if (!items.length) { box.innerHTML = `<div class="small" style="padding:8px">見つかりませんでした。町名だけ、施設名だけ、など言い方を変えてみてください${S._placesDenied ? '<br>※お店の名前で探すには Google Cloud で「Places API (New)」を有効にしてください' : ''}</div>`; return; }
   box.innerHTML = items.map((it, i) => `<div class="sr" data-i="${i}"><span class="ico">${it.ico}</span><span class="nm"><b>${esc(it.name)}</b><span>${esc(it.sub)}</span></span></div>`).join('');
   box.querySelectorAll('.sr').forEach(el => el.onclick = () => goTo(items[+el.dataset.i]));
 }
