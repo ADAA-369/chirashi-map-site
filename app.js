@@ -308,11 +308,12 @@ async function loadTowns() {
 }
 function styleTowns() {
   const z = S.map.getZoom();
-  const adding = S.boardAdding || S.spotAdding;
+  const adding = S.boardAdding || S.spotAdding || !!S.drawing;
   S.map.data.setStyle({ visible: z >= 14, strokeColor: '#ffffff', strokeOpacity: z >= 16 ? 0.55 : 0.35, strokeWeight: 1, fillOpacity: 0, clickable: z >= 14 && !adding, zIndex: 1 });
 }
 // 追加モード：ポリゴンやピンがタップを横取りしないようにする
 function setAddingUI(on) {
+  if (!on && (S.boardAdding || S.spotAdding)) on = true;
   styleTowns();
   for (const p of S.polys.values()) p.setOptions({ clickable: !on });
   for (const p of S.overlapPolys) p.setOptions({ clickable: false });
@@ -488,98 +489,100 @@ function startDrawing() {
   const rect = layer.getBoundingClientRect();
   cv.width = Math.round(rect.width * devicePixelRatio); cv.height = Math.round(rect.height * devicePixelRatio);
   const ctx = cv.getContext('2d'); ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-  S.drawing = { pts: [], ctx, rect, active: false, mode: S.drawMode || 'tap', down: null, dragIdx: null, dragMoved: false, dragInserted: false };
+  S.drawing = { pts: [], ll: [], ctx, rect, active: false, mode: S.drawMode || 'tap', down: null, vMarkers: [], mMarkers: [], line: null, poly: null, closeLine: null };
+  setAddingUI(true);   // 町丁目・ポリゴン・ピンがタップを横取りしないように
   setDrawMode(S.drawing.mode);
-  $('#fab').hidden = true; setLegend(false); $('#legendBtn').hidden = true; $('#zoomBtns').hidden = true;
+  $('#fab').hidden = true; setLegend(false); $('#legendBtn').hidden = true; $('#zoomBtns').hidden = true; $('#svBtn').hidden = true; $('#centerMark').hidden = true;
   const pos = e => [e.clientX - S.drawing.rect.left, e.clientY - S.drawing.rect.top];
-  const near = (pts, x, y, r) => { let best = -1, bd = r; pts.forEach(([px, py], i) => { const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; } }); return best; };
+  // なぞるモード（キャンバス）
   layer.onpointerdown = e => {
-    if (e.target !== cv) return;              // ボタン上の操作は無視
+    const d = S.drawing; if (!d || d.mode !== 'free' || e.target !== cv) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault(); layer.setPointerCapture?.(e.pointerId);
-    const d = S.drawing; const [x, y] = pos(e); d.down = [x, y];
-    if (d.mode === 'free') { d.active = true; d.pts = []; addPt(e); return; }
-    // 点で囲む：既存の点をつかむ／辺の中点をつかんで点を追加／空いている所なら後で点を追加
-    const hitR = e.pointerType === 'touch' ? 26 : 16;
-    const vi = near(d.pts, x, y, hitR);
-    if (vi >= 0) { d.dragIdx = vi; d.dragMoved = false; d.dragInserted = false; return; }
-    if (d.pts.length >= 2) {
-      const mids = midpoints(d.pts);
-      const mi = near(mids, x, y, hitR - 4);
-      if (mi >= 0) { d.pts.splice(mi + 1, 0, [x, y]); d.dragIdx = mi + 1; d.dragMoved = false; d.dragInserted = true; drawPreview(d.pts.length >= 3); return; }
-    }
+    d.active = true; d.pts = []; addPt(e);
   };
-  layer.onpointermove = e => {
-    const d = S.drawing; if (!d) return;
-    if (d.mode === 'free') { if (d.active) { e.preventDefault(); addPt(e); } return; }
-    if (d.dragIdx != null) { e.preventDefault(); const [x, y] = pos(e); d.pts[d.dragIdx] = [x, y]; d.dragMoved = true; drawPreview(d.pts.length >= 3); }
-  };
-  layer.onpointerup = layer.onpointercancel = e => {
-    const d = S.drawing; if (!d) return;
-    if (e.target !== cv && !d.active && !d.down && d.dragIdx == null) return;
-    if (d.mode === 'free') { if (!d.active) return; d.active = false; d.down = null; finishStroke(); return; }
-    const [x, y] = pos(e);
-    if (d.dragIdx != null) {
-      // 動かさずに離した既存の点＝削除
-      if (!d.dragMoved && !d.dragInserted) d.pts.splice(d.dragIdx, 1);
-      d.dragIdx = null; d.down = null; updateTapUI(); return;
-    }
-    if (d.down && Math.hypot(x - d.down[0], y - d.down[1]) < 8) d.pts.push([x, y]);
-    d.down = null; updateTapUI();
-  };
+  layer.onpointermove = e => { const d = S.drawing; if (d?.mode === 'free' && d.active) { e.preventDefault(); addPt(e); } };
+  layer.onpointerup = layer.onpointercancel = e => { const d = S.drawing; if (d?.mode === 'free' && d.active) { d.active = false; finishStroke(); } };
   function addPt(e) {
-    const [x, y] = pos(e);
-    const pts = S.drawing.pts;
+    const [x, y] = pos(e); const pts = S.drawing.pts;
     if (pts.length) { const [px, py] = pts[pts.length - 1]; if (Math.hypot(x - px, y - py) < 3) return; }
     pts.push([x, y]); drawPreview(false);
   }
+  // 点で囲むモード（地図に直接置く：地図はそのまま動かせる）
+  S.drawing.mapClick = S.map.addListener('click', ev => { const d = S.drawing; if (d && d.mode === 'tap') tapAdd(ev.latLng); });
 }
-function midpoints(pts) {
-  const n = pts.length, out = [];
-  for (let i = 0; i < n; i++) { if (n < 3 && i === n - 1) break; const a = pts[i], b = pts[(i + 1) % n]; out.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]); }
-  return out;
+function tapAdd(latLng, index) {
+  const d = S.drawing; const p = { lat: latLng.lat(), lng: latLng.lng() };
+  if (index == null) d.ll.push(p); else d.ll.splice(index, 0, p);
+  redrawTap();
+}
+function clearTapShapes() {
+  const d = S.drawing; if (!d) return;
+  for (const m of d.vMarkers) m.setMap(null); for (const m of d.mMarkers) m.setMap(null);
+  d.vMarkers = []; d.mMarkers = [];
+  d.line?.setMap(null); d.poly?.setMap(null); d.closeLine?.setMap(null); d.line = d.poly = d.closeLine = null;
+}
+function redrawTap() {
+  const d = S.drawing; if (!d) return;
+  clearTapShapes();
+  const n = d.ll.length;
+  if (n >= 2) d.line = new google.maps.Polyline({ path: d.ll, map: S.map, strokeColor: '#00e5ff', strokeWeight: 4, zIndex: 40, clickable: false });
+  if (n >= 3) {
+    d.poly = new google.maps.Polygon({ paths: d.ll, map: S.map, strokeOpacity: 0, fillColor: '#00e5ff', fillOpacity: 0.22, zIndex: 39, clickable: false });
+    d.closeLine = new google.maps.Polyline({ path: [d.ll[n - 1], d.ll[0]], map: S.map, strokeOpacity: 0, zIndex: 40, clickable: false,
+      icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeColor: '#00e5ff', scale: 3 }, offset: '0', repeat: '14px' }] });
+  }
+  // 辺の中点（タップで点を追加）
+  if (n >= 2) {
+    const segs = n >= 3 ? n : n - 1;
+    for (let i = 0; i < segs; i++) {
+      const a = d.ll[i], b = d.ll[(i + 1) % n];
+      const m = new google.maps.Marker({ position: { lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 }, map: S.map, zIndex: 41,
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#fff', fillOpacity: 0.9, strokeColor: '#0097a7', strokeWeight: 2 }, title: '点を追加' });
+      m.addListener('click', () => tapAdd(m.getPosition(), i + 1));
+      d.mMarkers.push(m);
+    }
+  }
+  // 頂点（ドラッグで移動・タップで削除）
+  d.ll.forEach((p, i) => {
+    const m = new google.maps.Marker({ position: p, map: S.map, zIndex: 42, draggable: true, crossOnDrag: false,
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 14, fillColor: '#fff', fillOpacity: 1, strokeColor: '#00b8d4', strokeWeight: 3 },
+      label: { text: String(i + 1), color: '#0b3a48', fontSize: '13px', fontWeight: '700' }, title: 'ドラッグで移動／タップで削除' });
+    let dragged = false;
+    m.addListener('dragstart', () => { dragged = true; });
+    m.addListener('drag', () => { d.ll[i] = { lat: m.getPosition().lat(), lng: m.getPosition().lng() }; d.line?.setPath(d.ll); d.poly?.setPath(d.ll); if (d.closeLine) d.closeLine.setPath([d.ll[d.ll.length - 1], d.ll[0]]); });
+    m.addListener('dragend', () => { d.ll[i] = { lat: m.getPosition().lat(), lng: m.getPosition().lng() }; redrawTap(); });
+    m.addListener('click', () => { if (dragged) { dragged = false; return; } d.ll.splice(i, 1); redrawTap(); });
+    d.vMarkers.push(m);
+  });
+  updateTapUI();
 }
 function updateTapUI() {
-  const d = S.drawing; const n = d.pts.length;
-  drawPreview(n >= 3);
+  const d = S.drawing; const n = d.ll.length;
   $('#btnDrawDone').disabled = n < 3;
   $('#btnDrawUndo').disabled = n === 0;
-  $('#drawHint').textContent = n === 0 ? '範囲の角を順番にタップ（ぐるっと一周する順で）'
-    : n < 3 ? `角を順番にタップ（あと${3 - n}点）。点はドラッグで移動`
-    : '点＝ドラッグで移動・タップで削除／辺の小さな丸＝点を追加。よければ「これで決定」';
+  $('#drawHint').textContent = n === 0 ? '範囲の角を順番にタップ（地図は指で動かせます）'
+    : n < 3 ? `角を順番にタップ（あと${3 - n}点）`
+    : '白丸：ドラッグで移動／タップで削除　小丸：点を追加';
 }
 function setDrawMode(mode) {
   const d = S.drawing; S.drawMode = mode; if (!d) return;
-  d.mode = mode; d.pts = []; d.active = false; d.dragIdx = null; d.down = null; drawPreview(false);
+  d.mode = mode; d.pts = []; d.active = false; d.ll = []; clearTapShapes(); drawPreview(false);
   $('#modeFree').classList.toggle('on', mode === 'free'); $('#modeTap').classList.toggle('on', mode === 'tap');
   $('#btnDrawUndo').hidden = mode !== 'tap'; $('#btnDrawDone').disabled = true;
+  // なぞる時だけキャンバスが指を受け取る。点で囲む時は地図をそのまま操作できる
+  $('#drawLayer').classList.toggle('tapMode', mode === 'tap');
   if (mode === 'tap') updateTapUI(); else $('#drawHint').textContent = '配った範囲を指でなぞって囲んでください';
 }
 function drawPreview(closed) {
-  const { ctx, rect, pts, mode } = S.drawing;
+  const { ctx, rect, pts } = S.drawing;
   ctx.clearRect(0, 0, rect.width, rect.height);
-  if (!pts.length) return;
+  if (pts.length < 2) return;
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  if (pts.length >= 2) {
-    // 実線：たどった順の辺
-    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
-    for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
-    ctx.lineWidth = 4; ctx.strokeStyle = '#00e5ff'; ctx.stroke();
-    if (closed) {
-      // 塗り＋最後→最初は点線（閉じる辺）
-      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y); ctx.closePath();
-      ctx.fillStyle = 'rgba(0,229,255,.22)'; ctx.fill();
-      if (mode === 'tap') { ctx.beginPath(); ctx.moveTo(pts[pts.length - 1][0], pts[pts.length - 1][1]); ctx.lineTo(pts[0][0], pts[0][1]); ctx.setLineDash([8, 8]); ctx.lineWidth = 3; ctx.strokeStyle = '#00e5ff'; ctx.stroke(); ctx.setLineDash([]); }
-    }
-  }
-  if (mode !== 'tap') return;
-  // 辺の中点（点を追加できる小さな丸）
-  if (pts.length >= 2) for (const [x, y] of midpoints(pts)) { ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#0097a7'; ctx.stroke(); }
-  // 頂点（番号つき）
-  pts.forEach(([x, y], i) => {
-    ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#00b8d4'; ctx.stroke();
-    ctx.fillStyle = '#0b3a48'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(i + 1), x, y + 0.5);
-  });
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+  ctx.lineWidth = 4; ctx.strokeStyle = '#00e5ff'; ctx.stroke();
+  if (closed) { ctx.closePath(); ctx.fillStyle = 'rgba(0,229,255,.22)'; ctx.fill(); }
 }
 function finishStroke() {
   const d = S.drawing;
@@ -589,14 +592,15 @@ function finishStroke() {
   $('#drawHint').textContent = 'よければ「これで決定」（次の画面で角を調整できます）';
 }
 function cancelDrawing() {
-  $('#drawLayer').hidden = true; $('#fab').hidden = false; S.drawing = null;
-  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; $('#zoomBtns').hidden = false;
+  clearTapShapes(); if (S.drawing?.mapClick) google.maps.event.removeListener(S.drawing.mapClick);
+  $('#drawLayer').hidden = true; $('#fab').hidden = false; S.drawing = null; setAddingUI(false);
+  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; $('#zoomBtns').hidden = false; $('#svBtn').hidden = false; $('#centerMark').hidden = false;
 }
 function commitDrawing() {
   const d = S.drawing; if (!d) return;
-  if ((d.mode === 'free' && d.pts.length < 8) || (d.mode === 'tap' && d.pts.length < 3)) { toast('先に範囲を描いてください'); return; }
+  if ((d.mode === 'free' && d.pts.length < 8) || (d.mode === 'tap' && d.ll.length < 3)) { toast('先に範囲を描いてください'); return; }
   const projection = S.proj.getProjection();
-  let coords = d.pts.map(([x, y]) => { const ll = projection.fromContainerPixelToLatLng(new google.maps.Point(x, y)); return [ll.lng(), ll.lat()]; });
+  let coords = d.mode === 'tap' ? d.ll.map(p => [p.lng, p.lat]) : d.pts.map(([x, y]) => { const ll = projection.fromContainerPixelToLatLng(new google.maps.Point(x, y)); return [ll.lng(), ll.lat()]; });
   coords.push(coords[0]);
   let poly = turf.polygon([coords]);
   if (d.mode === 'free') { try { poly = turf.simplify(poly, { tolerance: 0.00004, highQuality: true }); } catch { } }
@@ -1148,7 +1152,7 @@ function bindUI() {
   $('#fab').onclick = startDrawing;
   $('#btnDrawCancel').onclick = cancelDrawing;
   $('#btnDrawRedo').onclick = () => setDrawMode(S.drawing.mode);
-  $('#btnDrawUndo').onclick = () => { const d = S.drawing; d.pts.pop(); updateTapUI(); };
+  $('#btnDrawUndo').onclick = () => { const d = S.drawing; d.ll.pop(); redrawTap(); };
   $('#btnDrawDone').onclick = commitDrawing;
   $('#modeFree').onclick = () => setDrawMode('free');
   $('#modeTap').onclick = () => setDrawMode('tap');
