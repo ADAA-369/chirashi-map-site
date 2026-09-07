@@ -157,6 +157,9 @@ th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--pan
 .bar{height:8px;border-radius:4px;background:var(--panel2);overflow:hidden}
 .bar i{display:block;height:100%;background:var(--ok)}
 
+.rules{padding-left:1.3em;margin:10px 0;font-size:14px;line-height:1.5}
+.rules li{margin:6px 0}
+
 /* login */
 #login{position:absolute;inset:0;z-index:50;background:var(--bg);display:grid;place-items:center;padding:20px}
 .loginBox{width:min(92vw,380px);background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px}

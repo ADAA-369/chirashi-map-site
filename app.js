@@ -94,8 +94,8 @@ const SupabaseStore = {
     return { ...DEFAULT_SETTINGS, ...d };
   },
   async saveSettings(s) {
-    const flyers = (s.flyers || []).filter(f => !f.orphan); const { members, noticeDate, cities } = s;
-    const { error } = await this.client.from('settings').upsert({ id: 'main', data: { flyers, members, noticeDate, cities }, updated_at: new Date().toISOString() });
+    const flyers = (s.flyers || []).filter(f => !f.orphan); const { members, noticeDate, cities, admins } = s;
+    const { error } = await this.client.from('settings').upsert({ id: 'main', data: { flyers, members, noticeDate, cities, admins: admins || [] }, updated_at: new Date().toISOString() });
     if (error) { console.error(error); toast('設定の保存に失敗しました（通信）'); throw error; }
   },
   async addMember(name) {
@@ -200,11 +200,12 @@ async function init() {
   await loadGoogleMaps();
   await initMap();
   await loadTowns();
-  renderAll();
+  renderAll(); applyRole();
+  if (localStorage.getItem('cm_rules_ack') !== String(RULES_VERSION)) setTimeout(() => showRules(true), 800);
   setInterval(renderNotice, 60000);
   store.subscribe((recs, sets, boards, spots, events, asg) => {
     S.records = recs; if (boards) S.boards = boards; if (spots) S.spots = spots; if (events) S.events = events; if (asg) S.assignments = asg;
-    if (sets && Array.isArray(sets.flyers) && Array.isArray(sets.members)) { S.settings = { ...S.settings, ...sets }; for (const f of S.settings.flyers) if (!S.filter.flyers.has(f.id) && !S._userToggled) S.filter.flyers.add(f.id); }
+    if (sets && Array.isArray(sets.flyers) && Array.isArray(sets.members)) { S.settings = { ...S.settings, ...sets }; for (const f of S.settings.flyers) if (!S.filter.flyers.has(f.id) && !S._userToggled) S.filter.flyers.add(f.id); applyRole(); }
     renderAll();
   });
 }
@@ -267,7 +268,7 @@ function showLogin(resolve, opt = {}) {
     S.user = name;
     localStorage.setItem('cm_user', JSON.stringify({ name, pass }));
     box.hidden = true; $('#inpPass').disabled = false;
-    $('#menuUser').textContent = `👤 ${name}`;
+    $('#menuUser').textContent = `👤 ${name}`; if (S.map) applyRole();
     resolve && resolve();
   };
 }
@@ -535,7 +536,7 @@ function renderChips() {
     c.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; c.classList.add('dragOver'); };
     c.ondragleave = () => c.classList.remove('dragOver');
     c.ondrop = async e => {
-      e.preventDefault(); c.classList.remove('dragOver');
+      e.preventDefault(); c.classList.remove('dragOver'); if (!isAdmin()) return;
       const from = e.dataTransfer.getData('text/plain'), to = c.dataset.id; if (!from || from === to) return;
       const arr = S.settings.flyers; const fi = arr.findIndex(f => f.id === from), ti = arr.findIndex(f => f.id === to);
       if (fi < 0 || ti < 0) return;
@@ -815,12 +816,12 @@ function showRecord(r, latLng) {
       <dt>面積</dt><dd>約 ${(r.area_m2 ?? 0).toLocaleString()} ㎡</dd>
       ${r.memo ? `<dt>メモ</dt><dd>${esc(r.memo)}</dd>` : ''}
     </dl>
-    <div class="btnRow"><button class="ghost" id="rDel">削除</button><button class="ghost" id="rShape">形を直す</button><button class="ghost" id="rEdit">編集</button><button class="primary" id="rClose">閉じる</button></div>
+    <div class="btnRow">${isAdmin() || r.member === S.user ? '<button class="ghost" id="rDel">削除</button>' : ''}<button class="ghost" id="rShape">形を直す</button><button class="ghost" id="rEdit">編集</button><button class="primary" id="rClose">閉じる</button></div>
   `);
   $('#rClose').onclick = closeSheet;
   $('#rEdit').onclick = () => openRecordForm(r);
   $('#rShape').onclick = () => { if ($('#fab').disabled) { toast('告示日を過ぎているため変更できません'); return; } startAdjust(r.polygon, r); };
-  $('#rDel').onclick = async () => {
+  if ($('#rDel')) $('#rDel').onclick = async () => {
     if (!confirm(`${r.date} ${r.member} の記録（${list.length}件）を削除しますか？`)) return;
     try { for (const x of list) await store.deleteRecord(x.id); } catch { return; }
     S.records = await store.loadRecords(); closeSheet(); renderAll(); toast('削除しました');
@@ -895,6 +896,8 @@ function showSettings() {
     <button class="ghost" id="addFlyer" style="padding:8px 12px;border-radius:8px;margin-top:6px">＋ チラシを追加</button>
     <h4 style="margin:18px 0 4px">メンバー（配る人）</h4>
     <label>1行に1人<textarea id="sMembers" rows="4">${esc(s.members.join('\n'))}</textarea></label>
+    <h4 style="margin:18px 0 4px">管理者</h4>
+    <label>1行に1人。空欄なら全員が設定・削除できます。入れると、その人だけが設定変更・削除・割り当て作成・一覧取り込みをできます<textarea id="sAdmins" rows="2">${esc((s.admins || []).join('\n'))}</textarea></label>
     <h4 style="margin:18px 0 4px">告示日</h4>
     <label>この日以降は登録をロックします<input id="sNotice" type="date" value="${esc(s.noticeDate || '')}"></label>
     <div class="btnRow"><button class="ghost" id="sCancel">やめる</button><button class="primary" id="sSave">保存する</button></div>
@@ -912,6 +915,9 @@ function showSettings() {
     if (!flyers.length) { toast('チラシを1つ以上登録してください'); return; }
     s.flyers = flyers;
     const typed = $('#sMembers').value.split('\n').map(x => x.trim()).filter(Boolean);
+    const admins = $('#sAdmins').value.split('\n').map(x => x.trim()).filter(Boolean);
+    if (admins.length && !admins.includes(S.user) && !confirm('自分（' + S.user + '）が管理者に入っていません。保存すると設定を開けなくなります。よろしいですか？')) return;
+    s.admins = admins;
     s.noticeDate = $('#sNotice').value;
     $('#sSave').disabled = true;
     try {
@@ -922,7 +928,7 @@ function showSettings() {
       await store.saveSettings(s);
     } catch { $('#sSave').disabled = false; return; }
     for (const f of flyers) S.filter.flyers.add(f.id);
-    closeSheet(); renderAll(); toast('設定を保存しました');
+    closeSheet(); renderAll(); applyRole(); toast('設定を保存しました');
   };
   function flyerRow(f) { return `<div class="rowItem" data-id="${f.id}"><input type="color" value="${f.color}"><input type="text" value="${esc(f.name)}" placeholder="例：政策ビラ第2号"><input type="number" class="totalInp" inputmode="numeric" min="0" placeholder="用意枚数" value="${f.total ?? ''}" title="用意した枚数（残り枚数の計算用）"><span class="orderBtns"><button class="icon upFlyer" title="上へ">▲</button><button class="icon downFlyer" title="下へ">▼</button></span><button class="icon delFlyer">🗑</button></div>`; }
   function bindFlyerRows() {
@@ -962,7 +968,15 @@ const BOARD_STYLE = {
   check:    { color: '#f2a93b', label: '？', name: '要確認' },
 };
 const BOARD_ST_LABEL = k => BOARD_STYLE[k]?.name || k;
-const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: '掲示場', path: () => google.maps.SymbolPath.CIRCLE, scale: 13 }, general: { name: '一般ポスター（支援者宅・店舗など）', short: '一般', path: () => 'M -9,-9 L 9,-9 L 9,9 L -9,9 Z', scale: 1 } };
+const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: '掲示場' }, general: { name: '一般ポスター（支援者宅・店舗など）', short: '一般' } };
+// 看板の形のアイコン（SVG）。official＝支柱付きの掲示板、general＝貼り紙
+function boardIcon(kind, color, text) {
+  const t = String(text || '').slice(0, 4); const fs = t.length >= 3 ? 11 : 13;
+  const svg = kind === 'general'
+    ? `<svg xmlns='http://www.w3.org/2000/svg' width='36' height='42' viewBox='0 0 36 42'><path d='M6 4h24v30l-6-4-6 4-6-4-6 4z' fill='${color}' stroke='#fff' stroke-width='2'/><circle cx='18' cy='6' r='2.5' fill='#333'/><text x='18' y='22' font-size='${fs}' font-weight='700' text-anchor='middle' fill='#111' font-family='sans-serif'>${t}</text></svg>`
+    : `<svg xmlns='http://www.w3.org/2000/svg' width='40' height='44' viewBox='0 0 40 44'><rect x='18' y='26' width='4' height='16' fill='#6b4f2a'/><rect x='3' y='3' width='34' height='24' rx='3' fill='${color}' stroke='#fff' stroke-width='2.5'/><rect x='7' y='7' width='26' height='16' fill='rgba(255,255,255,.35)'/><text x='20' y='20' font-size='${fs}' font-weight='700' text-anchor='middle' fill='#111' font-family='sans-serif'>${t}</text></svg>`;
+  return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), scaledSize: new google.maps.Size(kind === 'general' ? 36 : 40, kind === 'general' ? 42 : 44), anchor: new google.maps.Point(kind === 'general' ? 18 : 20, kind === 'general' ? 40 : 42) };
+}
 S.boardKindFilter = 'all';
 function setLegend(open) { S.legendOpen = open; $('#legend').hidden = !open; $('#legendBtn').classList.toggle('on', open); }
 function toggleBoards(on) {
@@ -990,12 +1004,11 @@ function renderBoards() {
   for (const b of S.boards) {
     const kind = b.kind || 'official';
     if (S.boardKindFilter !== 'all' && kind !== S.boardKindFilter) continue;
-    const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo; const k = BOARD_KIND[kind];
+    const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
     const m = new google.maps.Marker({
       position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20,
-      icon: { path: k.path(), scale: k.scale, fillColor: st.color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2.5, anchor: kind === 'general' ? new google.maps.Point(0, 0) : undefined },
-      label: { text: b.no ? String(b.no) : st.label, color: '#0b1a24', fontSize: '12px', fontWeight: '700' },
-      title: `${b.no ? b.no + ' ' : ''}${b.place || ''}`,
+      icon: boardIcon(kind, st.color, b.no || st.label),
+      title: `${b.no ? b.no + ' ' : ''}${b.place || ''}（${BOARD_ST_LABEL(b.status)}）`,
     });
     m.addListener('click', () => { if (!S.boardAdding) showBoard(b); });
     S.boardMarkers.set(b.id, m);
@@ -1041,7 +1054,7 @@ async function showBoard(b) {
       <label>種類<select id="bKind"><option value="official" ${(b.kind || 'official') === 'official' ? 'selected' : ''}>選挙用ポスター掲示場</option><option value="general" ${b.kind === 'general' ? 'selected' : ''}>一般ポスター</option></select></label>
       <label>番号<input id="bNo" type="text" value="${esc(b.no)}"></label>
       <label>場所<input id="bPlace" type="text" value="${esc(b.place)}"></label>
-      <div class="btnRow"><button class="ghost" id="bMove">📍 位置を直す</button><button class="ghost" id="bDel" style="color:var(--danger)">この掲示場を削除</button></div>
+      <div class="btnRow"><button class="ghost" id="bMove">📍 位置を直す</button>${isAdmin() ? '<button class="ghost" id="bDel" style="color:var(--danger)">この掲示場を削除</button>' : ''}</div>
     </details>
     <div class="btnRow"><button class="ghost" id="bCancel">閉じる</button><button class="primary" id="bSave">保存する</button></div>
   `);
@@ -1058,7 +1071,7 @@ async function showBoard(b) {
   };
   $('#bCancel').onclick = closeSheet;
   $('#bMove').onclick = () => startPinPlace(new google.maps.LatLng(b.lat, b.lng), async pos => { const nb = { ...b, lat: +pos.lat().toFixed(6), lng: +pos.lng().toFixed(6) }; try { await store.saveBoard(nb); } catch { return; } S.boards = await store.loadBoards(); renderBoards(); toast('位置を直しました'); showBoard(S.boards.find(x => x.id === b.id) || nb); }, `掲示場 ${b.no} のピンをドラッグして「ここに決定」`);
-  $('#bDel').onclick = async () => { if (!confirm(`掲示場 ${b.no} を削除しますか？`)) return; try { await store.deleteBoard(b.id); } catch { return; } S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast('削除しました'); };
+  if ($('#bDel')) $('#bDel').onclick = async () => { if (!confirm(`掲示場 ${b.no} を削除しますか？`)) return; try { await store.deleteBoard(b.id); } catch { return; } S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast('削除しました'); };
   $('#bSave').onclick = async () => {
     $('#bSave').disabled = true;
     const nb = { ...b, status, posted_by: $('#bBy').value, posted_at: $('#bDate').value || today(), memo: $('#bMemo').value.trim(), no: $('#bNo').value.trim(), place: $('#bPlace').value.trim(), kind: $('#bKind').value };
@@ -1197,7 +1210,7 @@ function showSpot(sp) {
       <label>種類<select id="spKind">${Object.entries(SPOT_KIND).map(([kk, v]) => `<option value="${kk}" ${kk === sp.kind ? 'selected' : ''}>${v.emoji} ${v.name}</option>`).join('')}</select></label>
       <label>名前<input id="spName" type="text" value="${esc(sp.name)}"></label>
       <label>メモ<input id="spMemo" type="text" value="${esc(sp.memo || '')}"></label>
-      <div class="btnRow"><button class="ghost" id="spMove">📍 位置を直す</button><button class="ghost" id="spDel" style="color:var(--danger)">この場所を削除</button><button class="ghost" id="spEditSave">名前・種類を保存</button></div>
+      <div class="btnRow"><button class="ghost" id="spMove">📍 位置を直す</button>${isAdmin() ? '<button class="ghost" id="spDel" style="color:var(--danger)">この場所を削除</button>' : ''}<button class="ghost" id="spEditSave">名前・種類を保存</button></div>
     </details>
     <div class="btnRow"><button class="primary" id="spClose">閉じる</button></div>
   `);
@@ -1211,7 +1224,7 @@ function showSpot(sp) {
     try { await store.saveSpot(nsp); } catch { return; }
     S.spots = await store.loadSpots(); renderSpots(); showSpot(S.spots.find(x => x.id === sp.id) || nsp); toast('保存しました');
   };
-  $('#spDel').onclick = async () => { if (!confirm(`「${sp.name}」を削除しますか？（予定・実績も見えなくなります）`)) return; try { await store.deleteSpot(sp.id); } catch { return; } S.spots = await store.loadSpots(); closeSheet(); renderSpots(); toast('削除しました'); };
+  if ($('#spDel')) $('#spDel').onclick = async () => { if (!confirm(`「${sp.name}」を削除しますか？（予定・実績も見えなくなります）`)) return; try { await store.deleteSpot(sp.id); } catch { return; } S.spots = await store.loadSpots(); closeSheet(); renderSpots(); toast('削除しました'); };
   $('#sheetBody').querySelectorAll('.evDone').forEach(b => b.onclick = async () => { const e = S.events.find(x => x.id === b.closest('.evRow').dataset.id); if (!e) return; try { await store.saveEvent({ ...e, done: true, member: e.member || S.user }); } catch { return; } S.events = await store.loadEvents(); renderSpots(); showSpot(sp); toast('実施済みにしました'); });
   $('#sheetBody').querySelectorAll('.evDel').forEach(b => b.onclick = async () => { const id = b.closest('.evRow').dataset.id; if (!confirm('この予定／記録を削除しますか？')) return; try { await store.deleteEvent(id); } catch { return; } S.events = await store.loadEvents(); renderSpots(); showSpot(sp); });
 }
@@ -1429,13 +1442,13 @@ function showAssignment(a) {
       <dt>作成</dt><dd>${esc(a.created_by || '')}</dd>
     </dl>
     <div class="btnRow"><button class="primary" id="asRecord">✅ この範囲で配布を記録する</button></div>
-    <div class="btnRow"><button class="ghost" id="asDone">記録せず完了にする</button><button class="ghost" id="asEdit">編集</button><button class="ghost" id="asDel" style="color:var(--danger)">削除</button><button class="ghost" id="asClose">閉じる</button></div>
+    <div class="btnRow"><button class="ghost" id="asDone">記録せず完了にする</button>${isAdmin() ? '<button class="ghost" id="asEdit">編集</button><button class="ghost" id="asDel" style="color:var(--danger)">削除</button>' : ''}<button class="ghost" id="asClose">閉じる</button></div>
   `);
   $('#asClose').onclick = closeSheet;
-  $('#asEdit').onclick = () => openAssignForm(a);
+  if ($('#asEdit')) $('#asEdit').onclick = () => openAssignForm(a);
   $('#asRecord').onclick = () => { if ($('#fab').disabled) { toast('告示日を過ぎているため登録できません'); return; } openRecordForm({ polygon: a.polygon, flyer_id: a.flyer_id || undefined, member: a.member || S.user, from_assignment: a.id }); };
   $('#asDone').onclick = async () => { try { await store.saveAssignment({ ...a, status: 'done' }); } catch { return; } S.assignments = await store.loadAssignments(); closeSheet(); renderAssignments(); toast('完了にしました'); };
-  $('#asDel').onclick = async () => { if (!confirm('この割り当てを削除しますか？')) return; try { await store.deleteAssignment(a.id); } catch { return; } S.assignments = await store.loadAssignments(); closeSheet(); renderAssignments(); toast('削除しました'); };
+  if ($('#asDel')) $('#asDel').onclick = async () => { if (!confirm('この割り当てを削除しますか？')) return; try { await store.deleteAssignment(a.id); } catch { return; } S.assignments = await store.loadAssignments(); closeSheet(); renderAssignments(); toast('削除しました'); };
 }
 function showAssignList() {
   const rows = [...S.assignments].sort((x, y) => (x.status === 'done') - (y.status === 'done') || String(x.due || '9999').localeCompare(String(y.due || '9999')));
@@ -1607,6 +1620,42 @@ async function decorateWeather(sp) {
   }
 }
 
+/* ---------------- してはいけないことカード（公職選挙法） ---------------- */
+const RULES_VERSION = 1;
+const RULES_HTML = `
+  <h3>⚠ してはいけないこと（公職選挙法）</h3>
+  <div class="small">ボランティアの善意が違反にならないための最低限です。迷ったら支部に確認。詳細は選挙管理委員会の案内が優先します。</div>
+  <ol class="rules">
+    <li><b>戸別訪問はいつでも禁止</b>。投票のお願いで家を一軒ずつ訪ねない。ポスティングは「投函するだけ」で、呼び鈴を鳴らして依頼しない</li>
+    <li><b>告示前に「投票してください」と言わない・書かない</b>（事前運動）。政治活動のビラ・演説・SNSは政策や活動の紹介まで</li>
+    <li><b>告示日以降のチラシのポスティングは禁止</b>。選挙運動用ビラ（証紙付き）は新聞折込・選挙事務所・演説会場・街頭演説の場所でのみ配れる。このアプリも告示日以降は配布記録をロックします</li>
+    <li><b>ボランティアに報酬を払わない・受け取らない</b>。交通費などの実費を除き、お金や品物のやり取りは買収になりうる</li>
+    <li><b>飲食物を出さない</b>（お茶・お菓子程度は可）。弁当は法律で決められた範囲だけ</li>
+    <li><b>投票日当日は選挙運動をしない</b>。SNSの新規投稿・投票依頼のメッセージも当日は不可</li>
+    <li><b>一般の人は選挙運動のメール・SMSを送れない</b>（候補者・政党のみ）。LINEやSNSでの拡散は告示後〜投票日前日まで可</li>
+    <li><b>18歳未満は選挙運動ができない</b>。手伝ってもらうのは政治活動の範囲まで</li>
+    <li><b>署名集めや人気投票をしない</b>。「〇〇さんを応援する署名」は禁止</li>
+    <li><b>写真は掲示板とポスターだけ</b>。通行人の顔・表札・車のナンバーが写らないように</li>
+    <li><b>迷ったら止まって聞く</b>。責任者の違反は候補者本人の当選無効につながる（連座制）</li>
+  </ol>
+  <div class="small">参考：総務省「選挙運動と政治活動」、各都道府県選管Q&amp;A。町議選の法定枚数（ビラ1,600枚・はがき800枚）などは選管資料で確認。</div>
+`;
+function showRules(first) {
+  openSheet(RULES_HTML + `<div class="btnRow">${first ? '<button class="primary" id="rulesOk">確認しました</button>' : '<button class="primary" id="rulesOk">閉じる</button>'}</div>`);
+  $('#rulesOk').onclick = () => { localStorage.setItem('cm_rules_ack', String(RULES_VERSION)); closeSheet(); };
+}
+
+/* ---------------- 権限（管理者／現場） ---------------- */
+// 設定に admins（名前の配列）があれば、その人だけが管理者。空なら全員が管理者（初期状態）
+const isAdmin = () => { const a = S.settings?.admins || []; return !a.length || a.includes(S.user); };
+function applyRole() {
+  const admin = isAdmin();
+  document.querySelector('.menuItem[data-view=settings]').hidden = !admin;
+  $('#btnAssignAdd').hidden = !admin;
+  $('#btnBoardImport').hidden = !admin;
+  $('#menuUser').textContent = `👤 ${S.user || ''}${admin && (S.settings?.admins || []).length ? '（管理者）' : ''}`;
+}
+
 /* ---------------- UI バインド ---------------- */
 function bindUI() {
   $('#periodSel').value = S.filter.period;
@@ -1638,6 +1687,7 @@ function bindUI() {
   $('#btnSpotAddCancel').onclick = () => setSpotAdding(false);
   $('#btnSpotList').onclick = showSpotList;
   $('#btnAssign').onclick = () => { $('#menu').hidden = true; toggleAssignBar(true); };
+  $('#btnRules').onclick = () => { $('#menu').hidden = true; showRules(false); };
   $('#btnAssignClose').onclick = () => toggleAssignBar(false);
   $('#btnAssignAdd').onclick = startAssignDraw;
   $('#btnAssignList').onclick = showAssignList;
