@@ -1072,12 +1072,24 @@ async function runSearch() {
   const q = $('#searchInp').value.trim(); if (!q) return;
   const box = $('#searchResults'); box.innerHTML = '<div class="small" style="padding:8px">検索中…</div>';
   const items = [];
-  // 1) 町丁目（ローカル）
+  // 1) 町丁目（ローカル）。完全一致がなければ「宇治団地」→「宇治」のように語尾を落として近い町名を出す
   const qn = q.replace(/\s+/g, '');
-  for (const t of S.towns) {
-    if (t.kigo && t.kigo !== 'E1') continue;
-    if ((t.city + t.name).includes(qn) || t.name.includes(qn)) items.push({ ico: '🏘', name: `${t.city} ${t.name}`, sub: `町丁目 ／ ${t.setai.toLocaleString()}世帯`, lat: t.feature.properties.Y_CODE, lng: t.feature.properties.X_CODE, zoom: 16 });
-    if (items.length >= 8) break;
+  const townHit = (needle, note) => {
+    let c = 0;
+    for (const t of S.towns) {
+      if (t.kigo && t.kigo !== 'E1') continue;
+      if ((t.city + t.name).includes(needle) || t.name.includes(needle)) {
+        if (items.some(it => it.name === `${t.city} ${t.name}`)) continue;
+        items.push({ ico: '🏘', name: `${t.city} ${t.name}`, sub: `町丁目 ／ ${t.setai.toLocaleString()}世帯${note ? ' ／ ' + note : ''}`, lat: t.feature.properties.Y_CODE, lng: t.feature.properties.X_CODE, zoom: 16 });
+        if (++c >= 8) break;
+      }
+    }
+    return c;
+  };
+  if (!townHit(qn)) {
+    const stem = qn.replace(/(町内会|自治会|団地|公民館|集会所|コミュニティセンター|センター|公園|小学校|中学校|高校|保育園|幼稚園|神社|寺|駅|前|付近|周辺|あたり|辺り|の)+$/u, '');
+    if (stem && stem !== qn && stem.length >= 2) townHit(stem, `「${qn}」に近い町名`);
+    else if (qn.length >= 3) townHit(qn.slice(0, 2), `「${qn}」に近い町名`);
   }
   // 2) Google Places（店名・施設名。Places API (New) が有効な場合だけ）
   if (!S._placesDenied) {
@@ -1092,18 +1104,28 @@ async function runSearch() {
       }
     } catch (e) { console.warn('Places search unavailable', e); S._placesDenied = true; S._placesError = String(e?.message || e); }
   }
-  // 3) 国土地理院の住所・施設検索（無料・キー不要）。愛知県周辺を優先
+  // 3) 国土地理院の住所・施設検索（無料・キー不要）。県内を優先し、なければ市町村名を付けて再検索
   const inAichi = (lat, lng) => lat > 34.5 && lat < 35.5 && lng > 136.5 && lng < 138.0;
-  try {
-    const d = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(q)).then(r => r.json());
-    const near = [], far = [];
+  const gsi = async text => { try { return await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(text)).then(r => r.json()); } catch { return []; } };
+  const near = [], far = [];
+  const addGsi = (d, note) => {
     for (const f of d || []) {
       const [lng, lat] = f.geometry.coordinates; const title = f.properties.title || '';
-      if (items.some(it => it.name.replace(/\s/g, '') === title.replace(/[県市町村]/g, m => m).replace(/^愛知県/, '').replace(/\s/g, ''))) continue;
-      (inAichi(lat, lng) ? near : far).push({ ico: '📍', name: title, sub: /小学校|中学校|高校|公民館|駅|病院|役場|市役所|センター|公園|神社|寺/.test(title) ? '施設' : '住所・地名', lat, lng, zoom: 17 });
+      if ([...near, ...far, ...items].some(it => Math.abs(it.lat - lat) < 0.0003 && Math.abs(it.lng - lng) < 0.0003)) continue;
+      const sub = (/小学校|中学校|高校|公民館|駅|病院|役場|市役所|センター|公園|神社|寺/.test(title) ? '施設' : '住所・地名') + (note ? ' ／ ' + note : '');
+      (inAichi(lat, lng) ? near : far).push({ ico: '📍', name: title, sub, lat, lng, zoom: 17 });
     }
-    items.push(...near.slice(0, 6), ...far.slice(0, 2));
-  } catch (e) { console.warn('GSI search failed', e); }
+  };
+  addGsi(await gsi(q));
+  if (!near.length) {
+    const cities = (S.settings.cities || DEFAULT_CITIES).map(c => c.split('_')[1]).filter(Boolean);
+    for (const city of cities) {
+      const d = (await gsi(`${city} ${q}`)).filter(f => { const t = f.properties.title || ''; return !t.endsWith(city) && !/^愛知県(海部郡)?[^市町村]*[市町村]$/.test(t); }); // 市町村そのものは除外
+      addGsi(d, `${city}で検索`); if (near.length) break;
+    }
+  }
+  items.push(...near.slice(0, 6));
+  if (!near.length && !items.length) items.push(...far.slice(0, 3).map(it => ({ ...it, sub: it.sub + '（県外）' })));
   // 4) Google の住所検索（Geocoding API が有効な場合だけ）
   if (!S._geocoderDenied) {
     try {
