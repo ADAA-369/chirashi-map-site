@@ -124,7 +124,7 @@ const SupabaseStore = {
   // 15秒ごと＋画面復帰時に他の人の更新を取り込む
   subscribe(cb) {
     const tick = async () => {
-      if (document.hidden || S.drawing || S.adjust) return;
+      if (document.hidden || S.drawing || S.adjust || S.pin) return;
       try {
         const [recs, sets, boards, spots, events] = await Promise.all([this.loadRecords(), this.loadSettings(), this.loadBoards(), this.loadSpots(), this.loadEvents()]);
         const j = JSON.stringify([recs, sets, boards, spots, events]);
@@ -831,6 +831,24 @@ function showSettings() {
 }
 
 
+/* ---------------- 赤ピンで位置を合わせる（拠点・掲示場の追加／位置修正） ---------------- */
+function startPinPlace(latLng, onDone, hint) {
+  endPinPlace(false);
+  closeSheet(); S.infoWin.close();
+  const m = new google.maps.Marker({ position: latLng, map: S.map, draggable: true, zIndex: 60, animation: google.maps.Animation.DROP, crossOnDrag: false,
+    icon: { path: 'M 0,0 C -2,-6 -14,-9 -14,-20 A 14,14 0 1,1 14,-20 C 14,-9 2,-6 0,0 Z', fillColor: '#e53935', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2, scale: 1.4, labelOrigin: new google.maps.Point(0, -20) }, label: { text: '●', color: '#fff', fontSize: '10px' } });
+  S.pin = { marker: m, onDone };
+  $('#pinHint').textContent = hint || '赤いピンをドラッグして位置を合わせ、「ここに決定」';
+  $('#pinBar').hidden = false; $('#fab').hidden = true;
+  S.map.panTo(latLng);
+}
+function endPinPlace(ok) {
+  const p = S.pin; if (!p) return;
+  const pos = p.marker.getPosition(); p.marker.setMap(null); S.pin = null;
+  $('#pinBar').hidden = true; $('#fab').hidden = false;
+  if (ok) p.onDone(pos);
+}
+
 /* ---------------- ポスター掲示場（看板） ---------------- */
 const BOARD_STYLE = { todo: { color: '#9aa7b4', label: '未' }, done: { color: '#3fb950', label: '済' }, check: { color: '#f2a93b', label: '？' } };
 const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: '掲示場', path: () => google.maps.SymbolPath.CIRCLE, scale: 13 }, general: { name: '一般ポスター（支援者宅・店舗など）', short: '一般', path: () => 'M -9,-9 L 9,-9 L 9,9 L -9,9 Z', scale: 1 } };
@@ -872,6 +890,9 @@ function renderBoards() {
 }
 async function addBoardAt(latLng) {
   setBoardAdding(false);
+  startPinPlace(latLng, pos => addBoardForm(pos), 'ポスターを貼る場所にピンを合わせて「ここに決定」');
+}
+async function addBoardForm(latLng) {
   const kind = S.boardKindFilter === 'general' ? 'general' : 'official';
   const sameKind = S.boards.filter(x => (x.kind || 'official') === kind);
   const b = { id: uid(), kind, no: String(sameKind.length + 1), place: '', lat: +latLng.lat().toFixed(6), lng: +latLng.lng().toFixed(6), status: 'todo', memo: '' };
@@ -909,7 +930,7 @@ async function showBoard(b) {
       <label>種類<select id="bKind"><option value="official" ${(b.kind || 'official') === 'official' ? 'selected' : ''}>選挙用ポスター掲示場</option><option value="general" ${b.kind === 'general' ? 'selected' : ''}>一般ポスター</option></select></label>
       <label>番号<input id="bNo" type="text" value="${esc(b.no)}"></label>
       <label>場所<input id="bPlace" type="text" value="${esc(b.place)}"></label>
-      <button class="ghost" id="bDel" style="margin-top:8px;padding:8px 12px;border-radius:8px;color:var(--danger)">この掲示場を削除</button>
+      <div class="btnRow"><button class="ghost" id="bMove">📍 位置を直す</button><button class="ghost" id="bDel" style="color:var(--danger)">この掲示場を削除</button></div>
     </details>
     <div class="btnRow"><button class="ghost" id="bCancel">閉じる</button><button class="primary" id="bSave">保存する</button></div>
   `);
@@ -924,6 +945,7 @@ async function showBoard(b) {
     if (status === 'todo') { status = 'done'; $('#sheetBody').querySelectorAll('.stTabs button').forEach(x => x.classList.toggle('on', x.dataset.st === 'done')); }
   };
   $('#bCancel').onclick = closeSheet;
+  $('#bMove').onclick = () => startPinPlace(new google.maps.LatLng(b.lat, b.lng), async pos => { const nb = { ...b, lat: +pos.lat().toFixed(6), lng: +pos.lng().toFixed(6) }; try { await store.saveBoard(nb); } catch { return; } S.boards = await store.loadBoards(); renderBoards(); toast('位置を直しました'); showBoard(S.boards.find(x => x.id === b.id) || nb); }, `掲示場 ${b.no} のピンをドラッグして「ここに決定」`);
   $('#bDel').onclick = async () => { if (!confirm(`掲示場 ${b.no} を削除しますか？`)) return; try { await store.deleteBoard(b.id); } catch { return; } S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast('削除しました'); };
   $('#bSave').onclick = async () => {
     $('#bSave').disabled = true;
@@ -1012,6 +1034,9 @@ function renderSpots() {
 }
 function addSpotAt(latLng) {
   setSpotAdding(false);
+  startPinPlace(latLng, pos => addSpotForm(pos), '辻立ちする場所・事務所にピンを合わせて「ここに決定」');
+}
+function addSpotForm(latLng) {
   const sp = { id: uid(), kind: 'station', name: '', lat: +latLng.lat().toFixed(6), lng: +latLng.lng().toFixed(6), memo: '' };
   openSheet(`
     <h3>拠点・辻立ちスポットを追加</h3>
@@ -1045,11 +1070,12 @@ function showSpot(sp) {
       <label>種類<select id="spKind">${Object.entries(SPOT_KIND).map(([kk, v]) => `<option value="${kk}" ${kk === sp.kind ? 'selected' : ''}>${v.emoji} ${v.name}</option>`).join('')}</select></label>
       <label>名前<input id="spName" type="text" value="${esc(sp.name)}"></label>
       <label>メモ<input id="spMemo" type="text" value="${esc(sp.memo || '')}"></label>
-      <div class="btnRow"><button class="ghost" id="spDel" style="color:var(--danger)">この場所を削除</button><button class="ghost" id="spEditSave">名前・種類を保存</button></div>
+      <div class="btnRow"><button class="ghost" id="spMove">📍 位置を直す</button><button class="ghost" id="spDel" style="color:var(--danger)">この場所を削除</button><button class="ghost" id="spEditSave">名前・種類を保存</button></div>
     </details>
     <div class="btnRow"><button class="primary" id="spClose">閉じる</button></div>
   `);
   $('#spClose').onclick = closeSheet;
+  $('#spMove').onclick = () => startPinPlace(new google.maps.LatLng(sp.lat, sp.lng), async pos => { const nsp = { ...sp, lat: +pos.lat().toFixed(6), lng: +pos.lng().toFixed(6) }; try { await store.saveSpot(nsp); } catch { return; } S.spots = await store.loadSpots(); renderSpots(); toast('位置を直しました'); showSpot(S.spots.find(x => x.id === sp.id) || nsp); }, `「${sp.name}」のピンをドラッグして「ここに決定」`);
   $('#spPlan').onclick = () => openEventForm(sp, { done: false });
   $('#spDidNow').onclick = () => openEventForm(sp, { done: true, date: today() });
   $('#spEditSave').onclick = async () => {
@@ -1200,8 +1226,8 @@ function showSearchSheet(it) {
   `);
   const clearStar = () => { if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } closeSheet(); };
   $('#ssClose').onclick = clearStar;
-  $('#ssSpot').onclick = () => { toggleSpotBar(true); addSpotAt(new google.maps.LatLng(it.lat, it.lng)); setTimeout(() => { const n = $('#spName'); if (n && !n.value) n.value = it.name; }, 50); };
-  $('#ssBoard').onclick = () => { toggleBoards(true); addBoardAt(new google.maps.LatLng(it.lat, it.lng)); setTimeout(() => { const n = $('#bPlace'); if (n && !n.value) n.value = it.name; }, 50); };
+  $('#ssSpot').onclick = () => { toggleSpotBar(true); if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } addSpotForm(new google.maps.LatLng(it.lat, it.lng)); setTimeout(() => { const n = $('#spName'); if (n && !n.value) n.value = it.name; }, 50); };
+  $('#ssBoard').onclick = () => { toggleBoards(true); if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } addBoardForm(new google.maps.LatLng(it.lat, it.lng)); setTimeout(() => { const n = $('#bPlace'); if (n && !n.value) n.value = it.name; }, 50); };
 }
 
 /* ---------------- UI バインド ---------------- */
@@ -1234,6 +1260,8 @@ function bindUI() {
   $('#btnSpotAdd').onclick = () => { closeSheet(); setSpotAdding(true); };
   $('#btnSpotAddCancel').onclick = () => setSpotAdding(false);
   $('#btnSpotList').onclick = showSpotList;
+  $('#btnPinCancel').onclick = () => endPinPlace(false);
+  $('#btnPinOk').onclick = () => endPinPlace(true);
   $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; localStorage.removeItem('cm_user'); showLogin(); };
   $('#sheetHandle').onclick = closeSheet;
   $('#legendBtn').onclick = () => setLegend(!S.legendOpen);

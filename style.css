@@ -79,6 +79,8 @@ h1,h2,h3{margin:0 0 8px}
 .stTabs{display:flex;gap:6px;margin:6px 0}
 .stTabs button{flex:1;padding:9px;border-radius:10px;border:1px solid var(--border);background:var(--panel2);font-weight:600}
 .stTabs button.on{outline:2px solid var(--accent)}
+#pinBar{position:absolute;left:0;right:0;bottom:0;z-index:21;padding:10px 12px calc(16px + var(--safe-bottom));background:linear-gradient(transparent,rgba(15,23,32,.9) 30%)}
+#pinHint{text-align:center;font-size:13px;background:rgba(15,23,32,.9);border-radius:12px;padding:8px 12px;margin:0 auto 8px;max-width:420px}
 #adjustBar{position:absolute;left:0;right:0;bottom:0;z-index:20;padding:10px 12px calc(16px + var(--safe-bottom));background:linear-gradient(transparent,rgba(15,23,32,.9) 30%)}
 #adjustHint{text-align:center;font-size:13px;background:rgba(15,23,32,.9);border-radius:12px;padding:8px 12px;margin:0 auto 8px;max-width:420px}
 .adjustButtons{display:flex;gap:8px;justify-content:center}

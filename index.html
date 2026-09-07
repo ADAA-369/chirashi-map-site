@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="配布MAP">
-<link rel="stylesheet" href="style.css?v=20260907203839">
+<link rel="stylesheet" href="style.css?v=20260907204551">
 </head>
 <body>
 
@@ -85,6 +85,15 @@
     <div id="spotAddHint" hidden>事務所や辻立ちの場所を地図でタップしてください　<button id="btnSpotAddCancel" class="ghost small">やめる</button></div>
   </div>
 
+  <!-- ピンの位置合わせ -->
+  <div id="pinBar" hidden>
+    <div id="pinHint">赤いピンをドラッグして位置を合わせてください</div>
+    <div class="adjustButtons">
+      <button id="btnPinCancel" class="ghost">中止</button>
+      <button id="btnPinOk" class="primary">ここに決定</button>
+    </div>
+  </div>
+
   <!-- 形の調整（つまみ） -->
   <div id="adjustBar" hidden>
     <div id="adjustHint">白い四角を動かすと形を直せます（辺の途中の四角で角を増やせます）</div>
@@ -147,9 +156,9 @@
   <div id="toast" hidden></div>
 </div>
 
-<script src="config.js?v=20260907203839"></script>
+<script src="config.js?v=20260907204551"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
-<script src="app.js?v=20260907203839"></script>
+<script src="app.js?v=20260907204551"></script>
 </body>
 </html>
