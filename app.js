@@ -36,6 +36,7 @@ const LocalStore = {
     try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(this.skey) || '{}') }; } catch { return { ...DEFAULT_SETTINGS }; }
   },
   async saveSettings(s) { localStorage.setItem(this.skey, JSON.stringify(s)); },
+  async addMember(name) { const s = await this.loadSettings(); if (!s.members.includes(name)) { s.members.push(name); await this.saveSettings(s); } },
   subscribe() { /* 端末内保存は他端末からの更新なし */ },
   bkey: 'cm_boards_v1',
   async loadBoards() { try { return JSON.parse(localStorage.getItem(this.bkey) || '[]'); } catch { return []; } },
@@ -48,6 +49,9 @@ const LocalStore = {
   async loadSpots() { return this._l('cm_spots_v1'); },
   async saveSpot(x) { const a = this._l('cm_spots_v1'); const i = a.findIndex(y => y.id === x.id); if (i >= 0) a[i] = x; else a.push(x); this._s('cm_spots_v1', a); },
   async deleteSpot(id) { this._s('cm_spots_v1', this._l('cm_spots_v1').filter(y => y.id !== id)); },
+  async loadAssignments() { return this._l('cm_assign_v1'); },
+  async saveAssignment(x) { const a = this._l('cm_assign_v1'); const i = a.findIndex(y => y.id === x.id); if (i >= 0) a[i] = x; else a.push(x); this._s('cm_assign_v1', a); },
+  async deleteAssignment(id) { this._s('cm_assign_v1', this._l('cm_assign_v1').filter(y => y.id !== id)); },
   async loadEvents() { return this._l('cm_events_v1'); },
   async saveEvent(x) { const a = this._l('cm_events_v1'); const i = a.findIndex(y => y.id === x.id); if (i >= 0) a[i] = x; else a.push(x); this._s('cm_events_v1', a); },
   async deleteEvent(id) { this._s('cm_events_v1', this._l('cm_events_v1').filter(y => y.id !== id)); },
@@ -68,7 +72,7 @@ const SupabaseStore = {
   rowToRec(r) { return { id: r.id, group_id: r.group_id || null, member: r.member, date: r.date, flyer_id: r.flyer_id, count: r.count, memo: r.memo || '', polygon: r.polygon, est_setai: r.est_setai, town: r.town, area_m2: r.area_m2, created_at: r.created_at, updated_at: r.updated_at }; },
   async loadRecords() {
     const { data, error } = await this.client.from('records').select('*').eq('deleted', false).order('date', { ascending: false });
-    if (error) { console.error(error); toast('読み込みに失敗しました（通信）'); return S.records || []; }
+    if (error) { console.error(error); if (!this._silent) toast('読み込みに失敗しました（通信）'); return S.records || []; }
     return data.map(r => this.rowToRec(r));
   },
   async saveRecord(r) {
@@ -82,13 +86,21 @@ const SupabaseStore = {
   },
   async loadSettings() {
     const { data, error } = await this.client.from('settings').select('data').eq('id', 'main').maybeSingle();
-    if (error || !data) return { ...DEFAULT_SETTINGS };
-    return { ...DEFAULT_SETTINGS, ...(data.data || {}) };
+    if (error) { console.error(error); throw error; }            // 既定値に化けさせない（全員の設定を消す事故の防止）
+    if (!data) return { ...DEFAULT_SETTINGS };
+    const d = data.data || {};
+    if (d.flyers && !Array.isArray(d.flyers)) throw new Error('settings broken');
+    if (d.members && !Array.isArray(d.members)) throw new Error('settings broken');
+    return { ...DEFAULT_SETTINGS, ...d };
   },
   async saveSettings(s) {
-    const { flyers, members, noticeDate, cities } = s;
+    const flyers = (s.flyers || []).filter(f => !f.orphan); const { members, noticeDate, cities } = s;
     const { error } = await this.client.from('settings').upsert({ id: 'main', data: { flyers, members, noticeDate, cities }, updated_at: new Date().toISOString() });
-    if (error) { console.error(error); toast('設定の保存に失敗しました（通信）'); }
+    if (error) { console.error(error); toast('設定の保存に失敗しました（通信）'); throw error; }
+  },
+  async addMember(name) {
+    const { error } = await this.client.rpc('add_member', { p_name: name });
+    if (error) { console.error(error); throw error; }
   },
   async loadBoards() {
     const { data, error } = await this.client.from('boards').select('*').eq('deleted', false).order('no');
@@ -118,18 +130,23 @@ const SupabaseStore = {
   async loadSpots() { const { data, error } = await this.client.from('spots').select('*').eq('deleted', false).order('name'); if (error) { console.error(error); return S.spots || []; } return data; },
   async saveSpot(x) { const { error } = await this.client.from('spots').upsert({ id: x.id, kind: x.kind || 'station', name: x.name || '', lat: x.lat, lng: x.lng, memo: x.memo || '', updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
   async deleteSpot(id) { const { error } = await this.client.from('spots').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id); if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; } },
+  async loadAssignments() { const { data, error } = await this.client.from('assignments').select('*').eq('deleted', false).order('due', { ascending: true, nullsFirst: false }); if (error) { console.error(error); return S.assignments || []; } return data; },
+  async saveAssignment(x) { const { error } = await this.client.from('assignments').upsert({ id: x.id, member: x.member || null, flyer_id: x.flyer_id || null, polygon: x.polygon, due: x.due || null, note: x.note || '', status: x.status || 'planned', est_setai: x.est_setai ?? null, town: x.town || null, created_by: x.created_by || S.user || null, updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
+  async deleteAssignment(id) { const { error } = await this.client.from('assignments').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id); if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; } },
   async loadEvents() { const { data, error } = await this.client.from('spot_events').select('*').eq('deleted', false).order('date'); if (error) { console.error(error); return S.events || []; } return data; },
   async saveEvent(x) { const { error } = await this.client.from('spot_events').upsert({ id: x.id, spot_id: x.spot_id, date: x.date, time: x.time || '', member: x.member || null, memo: x.memo || '', done: !!x.done, updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
   async deleteEvent(id) { const { error } = await this.client.from('spot_events').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id); if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; } },
-  // 15秒ごと＋画面復帰時に他の人の更新を取り込む
+  // 15秒ごと＋画面復帰時：まず軽い「更新スタンプ」だけ取り、変わった時だけ全件取得（通信量を1/100以下に）
   subscribe(cb) {
     const tick = async () => {
-      if (document.hidden || S.drawing || S.adjust || S.pin) return;
+      if (document.hidden || S.drawing || S.adjust || S.pin || this._busy) return;
+      this._busy = true; this._silent = true;
       try {
-        const [recs, sets, boards, spots, events] = await Promise.all([this.loadRecords(), this.loadSettings(), this.loadBoards(), this.loadSpots(), this.loadEvents()]);
-        const j = JSON.stringify([recs, sets, boards, spots, events]);
-        if (j !== this._lastJson) { this._lastJson = j; cb(recs, sets, boards, spots, events); }
-      } catch { }
+        const { data: stamp, error } = await this.client.rpc('sync_stamp');
+        if (error || stamp === this._stamp) return;
+        const [recs, sets, boards, spots, events, asg] = await Promise.all([this.loadRecords(), this.loadSettings(), this.loadBoards(), this.loadSpots(), this.loadEvents(), this.loadAssignments()]);
+        this._stamp = stamp; cb(recs, sets, boards, spots, events, asg);
+      } catch { } finally { this._busy = false; this._silent = false; }
     };
     this._timer = setInterval(tick, 15000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
@@ -153,6 +170,8 @@ const S = window.S = {
   drawing: null,
   boards: [], boardMarkers: new Map(), boardsOn: false, boardAdding: false,
   spots: [], events: [], spotMarkers: new Map(), spotsOn: true, spotBarOn: false, spotAdding: false,
+  assignments: [], asgPolys: new Map(), asgLabels: [], assignBarOn: false, drawPurpose: 'record',
+  stations: [], stationMarkers: [], stationsOn: true,
 };
 
 const $ = s => document.querySelector(s);
@@ -160,30 +179,32 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const fmtDate = s => { const [y, m, d] = s.split('-'); return `${m}/${d}`; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const flyerOf = id => S.settings.flyers.find(f => f.id === id) || { name: '(削除済み)', color: '#888' };
+const safeColor = c => /^#[0-9a-f]{6}$/i.test(String(c || '')) ? c : '#888888';
+const flyerOf = id => { const f = S.settings.flyers.find(f => f.id === id); return f ? { ...f, color: safeColor(f.color) } : { id, name: '(削除済み)', color: '#888888' }; };
 function toast(msg, ms = 2200) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(t._t); t._t = setTimeout(() => t.hidden = true, ms); }
 
 /* ---------------- 起動 ---------------- */
 window.addEventListener('DOMContentLoaded', init);
 document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
 document.addEventListener('gesturechange', e => e.preventDefault(), { passive: false });
-let _lastTouchEnd = 0;
-document.addEventListener('touchend', e => { const now = Date.now(); if (now - _lastTouchEnd < 300 && !e.target.closest('#map')) e.preventDefault(); _lastTouchEnd = now; }, { passive: false });
+
 window.addEventListener('error', e => { console.error(e.error || e.message); toast('エラー: ' + (e.message || '不明').slice(0, 80), 5000); });
 window.addEventListener('unhandledrejection', e => { console.error(e.reason); toast('エラー: ' + String(e.reason?.message || e.reason).slice(0, 80), 5000); });
 
 async function init() {
   bindUI();
   await login();                       // 合言葉の検証と名前の選択（設定はこの中で読み込む）
-  [S.records, S.boards, S.spots, S.events] = await Promise.all([store.loadRecords(), store.loadBoards(), store.loadSpots(), store.loadEvents()]);
+  [S.records, S.boards, S.spots, S.events, S.assignments] = await Promise.all([store.loadRecords(), store.loadBoards(), store.loadSpots(), store.loadEvents(), store.loadAssignments()]);
+  fetch('data/stations.json').then(r => r.json()).then(d => { S.stations = d; renderStations(); }).catch(() => {});
   S.filter.flyers = new Set(S.settings.flyers.map(f => f.id));
   await loadGoogleMaps();
   await initMap();
   await loadTowns();
   renderAll();
-  store.subscribe((recs, sets, boards, spots, events) => {
-    S.records = recs; if (boards) S.boards = boards; if (spots) S.spots = spots; if (events) S.events = events;
-    if (sets) { S.settings = { ...S.settings, ...sets }; for (const f of S.settings.flyers) if (!S.filter.flyers.has(f.id) && !S._userToggled) S.filter.flyers.add(f.id); }
+  setInterval(renderNotice, 60000);
+  store.subscribe((recs, sets, boards, spots, events, asg) => {
+    S.records = recs; if (boards) S.boards = boards; if (spots) S.spots = spots; if (events) S.events = events; if (asg) S.assignments = asg;
+    if (sets && Array.isArray(sets.flyers) && Array.isArray(sets.members)) { S.settings = { ...S.settings, ...sets }; for (const f of S.settings.flyers) if (!S.filter.flyers.has(f.id) && !S._userToggled) S.filter.flyers.add(f.id); }
     renderAll();
   });
 }
@@ -191,32 +212,35 @@ async function init() {
 /* ---------------- ログイン（合言葉＋名前） ---------------- */
 function login() {
   return new Promise(async resolve => {
-    const saved = JSON.parse(localStorage.getItem('cm_user') || 'null');
+    let saved = null; try { saved = JSON.parse(localStorage.getItem('cm_user') || 'null'); } catch { }
     if (saved?.name) {
-      const ok = USE_SUPABASE ? await SupabaseStore.verify(saved.pass || '') : true;
-      if (ok) {
-        S.settings = await store.loadSettings();
-        if (S.settings.members.includes(saved.name)) { S.user = saved.name; $('#menuUser').textContent = `👤 ${saved.name}`; return resolve(); }
-      }
+      try {
+        const ok = USE_SUPABASE ? await SupabaseStore.verify(saved.pass || '') : true;
+        if (ok) {
+          S.settings = await store.loadSettings();
+          if (S.settings.members.includes(saved.name)) { S.user = saved.name; $('#menuUser').textContent = `👤 ${saved.name}`; return resolve(); }
+          return showLogin(resolve, { verified: true, pass: saved.pass });
+        }
+      } catch (e) { console.error(e); toast('通信できません。電波の良い所で開き直してください', 5000); }
     }
     showLogin(resolve);
   });
 }
-function showLogin(resolve) {
+function showLogin(resolve, opt = {}) {
   const box = $('#login'); box.hidden = false;
-  const needPass = USE_SUPABASE;
+  const needPass = USE_SUPABASE && !opt.verified;
   $('#loginPass').hidden = !needPass;
   $('#loginMsg').textContent = needPass ? '合言葉を入れてください' : 'あなたの名前を選んでください';
   $('#loginSub').hidden = !needPass;
   const sel = $('#selName'); const nameWrap = sel.closest('label');
-  let verified = !needPass;
+  let verified = !needPass; if (opt.pass) $('#inpPass').value = opt.pass;
   const fillNames = () => {
     sel.innerHTML = S.settings.members.map(m => `<option>${esc(m)}</option>`).join('') + '<option value="__new">＋ 新しい名前を追加</option>';
     sel.onchange = () => $('#newNameWrap').hidden = sel.value !== '__new';
     nameWrap.hidden = false;
   };
   nameWrap.hidden = needPass; $('#newNameWrap').hidden = true;
-  if (!needPass) { (async () => { S.settings = S.settings || await store.loadSettings(); fillNames(); })(); }
+  if (!needPass) { (async () => { try { S.settings = S.settings || await store.loadSettings(); } catch { S.settings = S.settings || { ...DEFAULT_SETTINGS }; } fillNames(); })(); }
   $('#btnLogin').textContent = needPass ? '次へ' : 'はじめる';
   $('#loginErr').textContent = '';
   $('#btnLogin').onclick = async () => {
@@ -228,7 +252,7 @@ function showLogin(resolve) {
       $('#btnLogin').disabled = false;
       if (!ok) { $('#loginErr').textContent = '合言葉が違います（または通信できません）'; return; }
       verified = true; $('#loginErr').textContent = '';
-      S.settings = await store.loadSettings();
+      try { S.settings = await store.loadSettings(); } catch { $('#loginErr').textContent = '設定を読み込めません（通信）'; verified = false; return; }
       fillNames(); $('#inpPass').disabled = true; $('#btnLogin').textContent = 'はじめる';
       return;
     }
@@ -236,7 +260,9 @@ function showLogin(resolve) {
     if (name === '__new') {
       name = $('#inpNewName').value.trim();
       if (!name) { $('#loginErr').textContent = '名前を入れてください'; return; }
-      if (!S.settings.members.includes(name)) { S.settings.members.push(name); await store.saveSettings(S.settings); }
+      const norm = x => x.replace(/[\s　]+/g, '');
+      const dup = S.settings.members.find(m => norm(m) === norm(name)); if (dup) name = dup;
+      else { try { await store.addMember(name); S.settings = await store.loadSettings(); } catch { $('#loginErr').textContent = '名前を登録できませんでした（通信）'; return; } }
     }
     S.user = name;
     localStorage.setItem('cm_user', JSON.stringify({ name, pass }));
@@ -284,7 +310,7 @@ async function initMap() {
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
     styleTowns();
-    const z = S.map.getZoom(); if (S._lastZoom !== undefined && (z >= 15) !== (S._lastZoom >= 15)) renderRecords(); S._lastZoom = z;
+    const z = S.map.getZoom(); if (S._lastZoom !== undefined && ((z >= 15) !== (S._lastZoom >= 15) || (z >= 14) !== (S._lastZoom >= 14))) { renderRecords(); renderAssignments(); } S._lastZoom = z;
   });
 }
 
@@ -299,7 +325,8 @@ async function loadTowns() {
       if (p.HCODE === 8154) continue; // 水面
       const town = { feature: f, id: p.KEY_CODE, name: p.S_NAME, city: p.CITY_NAME, setai: p.SETAI, jinko: p.JINKO, area: turf.area(f), kigo: p.KIGO_E };
       S.towns.push(town);
-      const [df] = S.map.data.addGeoJson(f, { idPropertyName: 'KEY_CODE' });
+      f.id = `${p.KEY_CODE}_${p.KIGO_E || 'main'}`;
+      const [df] = S.map.data.addGeoJson(f);
       S.townFeatures.set(df, town);
     }
   }
@@ -317,6 +344,8 @@ function setAddingUI(on) {
   styleTowns();
   for (const p of S.polys.values()) p.setOptions({ clickable: !on });
   for (const p of S.overlapPolys) p.setOptions({ clickable: false });
+  for (const p of S.asgPolys.values()) p.setOptions({ clickable: !on });
+  for (const m of S.stationMarkers) m.setOptions({ clickable: !on });
   for (const m of S.boardMarkers.values()) m.setOptions({ clickable: !on });
   for (const m of S.spotMarkers.values()) m.setOptions({ clickable: !on });
   S.map.setOptions({ draggableCursor: on ? 'crosshair' : null });
@@ -377,18 +406,31 @@ function ensureLabelClass() {
   };
 }
 
+// 同じチラシの既存記録との重なり率（期間フィルタに関係なく全記録で判定）
+function overlapRatio(ring, flyerId, excludeIds = []) {
+  const me = turf.polygon([ring]); const mb = turf.bbox(me); let a = 0;
+  for (const r of S.records) {
+    if (r.flyer_id !== flyerId || excludeIds.includes(r.id)) continue;
+    const rp = recPolygon(r); const rb = turf.bbox(rp);
+    if (rb[0] > mb[2] || rb[2] < mb[0] || rb[1] > mb[3] || rb[3] < mb[1]) continue;
+    try { const i = turf.intersect(turf.featureCollection([me, rp])); if (i) a += turf.area(i); } catch { }
+  }
+  return a / turf.area(me);
+}
+const isLocked = () => !!S.settings?.noticeDate && today() >= S.settings.noticeDate;
+
 /* ---------------- 記録の描画 ---------------- */
 const recPolygon = r => turf.polygon([r.polygon]);
 
 function filteredRecords() {
   const p = S.filter.period;
   let since = null;
-  if (p !== 'all') { const d = new Date(); d.setDate(d.getDate() - Number(p)); since = d.toISOString().slice(0, 10); }
+  if (p !== 'all') { const d = new Date(); d.setDate(d.getDate() - Number(p)); since = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
   return S.records.filter(r => S.filter.flyers.has(r.flyer_id) && (!since || r.date >= since));
 }
 
 function renderAll() {
-  renderChips(); renderNotice(); renderLegend(); renderRecords(); renderBoards(); renderSpots();
+  renderChips(); renderNotice(); renderLegend(); renderRecords(); renderBoards(); renderSpots(); renderAssignments(); renderStations();
 }
 
 function renderRecords() {
@@ -420,13 +462,17 @@ function renderRecords() {
       const lb = new RecLabel({ lat: c[1], lng: c[0] }, html, f.color); lb.setMap(S.map); S.labels.push(lb);
     }
   }
-  // 同じチラシ同士の重なりを赤で表示
+  // 同じチラシ同士の重なりを赤で表示（相手は期間に関係なく全記録）
   const byFlyer = {};
-  for (const r of recs) (byFlyer[r.flyer_id] ||= []).push(r);
+  for (const r of S.records) if (S.filter.flyers.has(r.flyer_id)) (byFlyer[r.flyer_id] ||= []).push(r);
+  const shown = new Set(recs.map(r => r.id));
   for (const list of Object.values(byFlyer)) {
     for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      if (!shown.has(list[i].id) && !shown.has(list[j].id)) continue;
       if (list[i].group_id && list[i].group_id === list[j].group_id) continue;
       const a = recPolygon(list[i]), b = recPolygon(list[j]);
+      const ab = turf.bbox(a), bb = turf.bbox(b);
+      if (ab[0] > bb[2] || ab[2] < bb[0] || ab[1] > bb[3] || ab[3] < bb[1]) continue;
       if (!turf.booleanIntersects(a, b)) continue;
       let inter; try { inter = turf.intersect(turf.featureCollection([a, b])); } catch { continue; }
       if (!inter) continue;
@@ -444,7 +490,9 @@ function renderRecords() {
 
 function renderChips() {
   const el = $('#flyerChips');
-  el.innerHTML = S.settings.flyers.map(f => `<button class="chip ${S.filter.flyers.has(f.id) ? 'on' : ''}" data-id="${f.id}" style="--c:${f.color}" draggable="true" title="ドラッグで並べ替え"><span class="dot"></span>${esc(f.name)}</button>`).join('');
+  const known = new Set(S.settings.flyers.map(f => f.id));
+  for (const id of new Set(S.records.map(r => r.flyer_id))) if (!known.has(id)) { S.settings.flyers.push({ id, name: '(削除済み)', color: '#888888', orphan: true }); }
+  el.innerHTML = S.settings.flyers.map(f => `<button class="chip ${S.filter.flyers.has(f.id) ? 'on' : ''}" data-id="${esc(f.id)}" style="--c:${safeColor(f.color)}" draggable="true" title="ドラッグで並べ替え"><span class="dot"></span>${esc(f.name)}</button>`).join('');
   el.querySelectorAll('.chip').forEach(c => {
     c.onclick = () => {
       const id = c.dataset.id; S._userToggled = true;
@@ -461,7 +509,7 @@ function renderChips() {
       const arr = S.settings.flyers; const fi = arr.findIndex(f => f.id === from), ti = arr.findIndex(f => f.id === to);
       if (fi < 0 || ti < 0) return;
       const [m] = arr.splice(fi, 1); arr.splice(ti, 0, m);
-      await store.saveSettings(S.settings); renderAll(); toast('並び順を保存しました');
+      try { await store.saveSettings(S.settings); renderAll(); toast('並び順を保存しました'); } catch { }
     };
   });
 }
@@ -645,7 +693,8 @@ function endAdjust(ok) {
   a.poly.setMap(null); S.adjust = null;
   $('#adjustBar').hidden = true; $('#fab').hidden = false; $('#legendBtn').hidden = S.boardsOn || S.spotBarOn;
   for (const p of S.polys.values()) p.setOptions({ clickable: true });
-  if (!ok) return;
+  if (!ok) { S.drawPurpose = 'record'; return; }
+  if (!a.rec && S.drawPurpose === 'assign') { S.drawPurpose = 'record'; openAssignForm({ polygon: ring }); return; }
   if (a.rec) {
     // 既存記録の形の変更：同じ範囲の記録すべてに反映してから内容編集へ
     const list = groupOf(a.rec).length ? groupOf(a.rec) : [a.rec];
@@ -673,7 +722,7 @@ function openRecordForm(rec) {
   const existing = isNew ? [] : groupOf(rec);
   const rows = existing.length ? existing.map(x => ({ id: x.id, flyer_id: x.flyer_id, count: x.count })) : [{ id: null, flyer_id: rec.flyer_id || flyers[0].id, count: rec.count ?? est.setai }];
   const base = existing[0] || rec;
-  const flyerRow = (row, i) => `<div class="rowItem flyerLine" data-id="${row.id || ''}"><select class="fFlyer">${flyers.map(f => `<option value="${f.id}" ${row.flyer_id === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select><input class="fCount" type="number" inputmode="numeric" min="0" value="${row.count}" placeholder="枚数"><button class="icon delLine" title="このチラシを外す">🗑</button></div>`;
+  const flyerRow = (row) => `<div class="rowItem flyerLine" data-id="${esc(row.id || uid())}"><select class="fFlyer">${flyers.map(f => `<option value="${f.id}" ${row.flyer_id === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select><input class="fCount" type="number" inputmode="numeric" min="0" value="${row.count}" placeholder="枚数"><button class="icon delLine" title="このチラシを外す">🗑</button></div>`;
   openSheet(`
     <h3>${isNew ? '配布を記録' : '記録を編集'}</h3>
     <div class="small">範囲 約${area.toLocaleString()}㎡ ／ 推定 <b>${est.setai}</b> 世帯 ／ ${esc(est.town)}</div>
@@ -690,24 +739,32 @@ function openRecordForm(rec) {
   $('#addLine').onclick = () => {
     const used = [...$('#flyerLines').querySelectorAll('.fFlyer')].map(x => x.value);
     const next = flyers.find(f => !used.includes(f.id)) || flyers[0];
-    $('#flyerLines').insertAdjacentHTML('beforeend', flyerRow({ id: null, flyer_id: next.id, count: est.setai }, 0)); bindLines();
+    $('#flyerLines').insertAdjacentHTML('beforeend', flyerRow({ id: null, flyer_id: next.id, count: est.setai })); bindLines();
   };
+  const locked = isLocked();
+  if (locked) { $('#addLine').hidden = true; const d = new Date(S.settings.noticeDate); d.setDate(d.getDate() - 1); $('#fDate').max = d.toISOString().slice(0, 10); }
   $('#fCancel').onclick = closeSheet;
   $('#fSave').onclick = async () => {
-    const lines = [...$('#flyerLines').querySelectorAll('.flyerLine')].map(el => ({ id: el.dataset.id || null, flyer_id: el.querySelector('.fFlyer').value, count: Number(el.querySelector('.fCount').value || 0) }));
+    if (locked && ($('#fDate').value >= S.settings.noticeDate || [...$('#flyerLines').querySelectorAll('.flyerLine')].some(el => !existing.some(x => x.id === el.dataset.id)))) { toast('告示日以降の配布は登録できません（公職選挙法）'); return; }
+    const lines = [...$('#flyerLines').querySelectorAll('.flyerLine')].map(el => ({ id: el.dataset.id, flyer_id: el.querySelector('.fFlyer').value, count: Number(el.querySelector('.fCount').value || 0) }));
     const seen = new Set(); for (const l of lines) { if (seen.has(l.flyer_id)) { toast('同じチラシが2行あります。1行にまとめてください'); return; } seen.add(l.flyer_id); }
+    for (const l of lines) {
+      const ratio = overlapRatio(rec.polygon, l.flyer_id, existing.map(x => x.id));
+      if (ratio > 0.2 && !confirm(`「${flyerOf(l.flyer_id).name}」は、すでに配った範囲と約${Math.round(ratio * 100)}%重なっています。このまま保存しますか？`)) return;
+    }
     const group_id = existing[0]?.group_id || (lines.length > 1 ? uid() : null);
     const common = { polygon: rec.polygon, date: $('#fDate').value || today(), member: $('#fMember').value, memo: $('#fMemo').value.trim(), est_setai: est.setai, town: est.town, area_m2: area, group_id: group_id || (lines.length > 1 ? uid() : null) };
     $('#fSave').disabled = true;
     try {
       for (const l of lines) {
         const prev = existing.find(x => x.id === l.id);
-        await store.saveRecord({ id: l.id || uid(), ...common, flyer_id: l.flyer_id, count: l.count, created_at: prev?.created_at || new Date().toISOString(), updated_at: new Date().toISOString() });
+        await store.saveRecord({ id: l.id, ...common, flyer_id: l.flyer_id, count: l.count, created_at: prev?.created_at || new Date().toISOString(), updated_at: new Date().toISOString() });
       }
       for (const x of existing) if (!lines.some(l => l.id === x.id)) await store.deleteRecord(x.id);
     } catch { $('#fSave').disabled = false; return; }
     S.records = await store.loadRecords();
     for (const l of lines) if (!S.filter.flyers.has(l.flyer_id)) S.filter.flyers.add(l.flyer_id);
+    if (rec.from_assignment) { const asg = S.assignments.find(x => x.id === rec.from_assignment); if (asg) { try { await store.saveAssignment({ ...asg, status: 'done' }); S.assignments = await store.loadAssignments(); } catch { } } }
     closeSheet(); renderAll(); toast('保存しました');
   };
 }
@@ -750,9 +807,10 @@ function showList() {
     <div class="tableWrap"><table><thead><tr><th>日付</th><th>配った人</th><th>チラシ</th><th>部数</th><th>主な町丁目</th></tr></thead><tbody>
     ${recs.map(r => `<tr data-id="${r.id}"><td>${fmtDate(r.date)}</td><td>${esc(r.member)}</td><td><span style="color:${flyerOf(r.flyer_id).color}">●</span> ${esc(flyerOf(r.flyer_id).name)}</td><td>${r.count}</td><td>${esc(r.town || '')}</td></tr>`).join('')}
     </tbody></table></div>
-    <div class="btnRow"><button class="ghost" id="lCsv">CSVを書き出す</button><button class="primary" id="lClose">閉じる</button></div>
+    <div class="btnRow"><button class="ghost" id="lCopy">📋 LINE用にコピー</button><button class="ghost" id="lCsv">CSV</button><button class="primary" id="lClose">閉じる</button></div>
   `);
   $('#lClose').onclick = closeSheet;
+  $('#lCopy').onclick = () => copyText(summaryText(recs));
   $('#lCsv').onclick = () => exportCsv(recs);
   $('#sheetBody').querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => {
     const r = S.records.find(x => x.id === tr.dataset.id); if (!r) return;
@@ -767,30 +825,37 @@ function exportCsv(recs) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `チラシ配布_${today()}.csv`; a.click();
 }
 
-function showTownTable() {
+function showTownTable(mode = 'has') {
   const recs = filteredRecords();
   const fl = S.settings.flyers.filter(f => S.filter.flyers.has(f.id));
   const rows = [];
   for (const t of S.towns) {
     if (t.kigo && t.kigo !== 'E1' && t.setai === 0) continue;
+    if (t.setai < 5) continue;
     const covs = fl.map(f => coverageOf(t, recs.filter(r => r.flyer_id === f.id)));
-    if (covs.every(c => c === 0)) continue;
+    const any = covs.some(c => c > 0);
+    if (mode === 'has' && !any) continue;
+    if (mode === 'zero' && any) continue;
     rows.push({ t, covs });
   }
-  rows.sort((a, b) => Math.max(...b.covs) - Math.max(...a.covs));
+  if (mode === 'zero') rows.sort((a, b) => b.t.setai - a.t.setai); else rows.sort((a, b) => Math.max(...b.covs) - Math.max(...a.covs));
+  const shown = rows.slice(0, 120);
   openSheet(`
     <h3>町丁目ごとの配布率</h3>
-    <div class="small">配布記録のある町丁目のみ。国勢調査（2020年）の世帯数に対する面積ベースの推定です</div>
+    <div class="stTabs"><button data-m="has" class="${mode === 'has' ? 'on' : ''}">記録あり</button><button data-m="zero" class="${mode === 'zero' ? 'on' : ''}">未配布（世帯数順）</button><button data-m="all" class="${mode === 'all' ? 'on' : ''}">すべて</button></div>
+    <div class="small">国勢調査（2020年）の世帯数に対する面積ベースの推定。${mode === 'zero' ? '世帯数が多い未配布の町丁目から並べています（次にどこを配るかの目安）' : ''}${rows.length > shown.length ? `　※上位${shown.length}件を表示` : ''}</div>
     <div class="tableWrap"><table><thead><tr><th>町丁目</th><th>世帯</th>${fl.map(f => `<th><span style="color:${f.color}">●</span>${esc(f.name)}</th>`).join('')}</tr></thead><tbody>
-    ${rows.map(({ t, covs }) => `<tr><td>${esc(t.city)} ${esc(t.name)}</td><td>${t.setai}</td>${covs.map(c => `<td><div>${Math.round(c * 100)}%</div><div class="bar"><i style="width:${Math.round(c * 100)}%"></i></div></td>`).join('')}</tr>`).join('') || '<tr><td colspan="9" class="small">まだ記録がありません</td></tr>'}
+    ${shown.map(({ t, covs }) => `<tr data-id="${t.id}"><td>${esc(t.city)} ${esc(t.name)}</td><td>${t.setai}</td>${covs.map(c => `<td><div>${Math.round(c * 100)}%</div><div class="bar"><i style="width:${Math.round(c * 100)}%"></i></div></td>`).join('')}</tr>`).join('') || '<tr><td colspan="9" class="small">該当なし</td></tr>'}
     </tbody></table></div>
     <div class="btnRow"><button class="primary" id="tClose">閉じる</button></div>
   `);
   $('#tClose').onclick = closeSheet;
+  $('#sheetBody').querySelectorAll('.stTabs button').forEach(b => b.onclick = () => showTownTable(b.dataset.m));
+  $('#sheetBody').querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => { const t = S.towns.find(x => x.id === tr.dataset.id); if (!t) return; closeSheet(); S.map.panTo({ lat: t.feature.properties.Y_CODE, lng: t.feature.properties.X_CODE }); S.map.setZoom(16); });
 }
 
 function showSettings() {
-  const s = S.settings;
+  const s = S.settings; const origMembers = [...s.members];
   openSheet(`
     <h3>設定</h3>
     <h4 style="margin:12px 0 4px">チラシの種類</h4>
@@ -815,9 +880,16 @@ function showSettings() {
     const flyers = [...$('#flyerRows').querySelectorAll('.rowItem')].map(r => ({ id: r.dataset.id, name: r.querySelector('input[type=text]').value.trim(), color: r.querySelector('input[type=color]').value, total: Number(r.querySelector('.totalInp').value) || 0 })).filter(f => f.name);
     if (!flyers.length) { toast('チラシを1つ以上登録してください'); return; }
     s.flyers = flyers;
-    s.members = $('#sMembers').value.split('\n').map(x => x.trim()).filter(Boolean);
+    const typed = $('#sMembers').value.split('\n').map(x => x.trim()).filter(Boolean);
     s.noticeDate = $('#sNotice').value;
-    await store.saveSettings(s);
+    $('#sSave').disabled = true;
+    try {
+      // 直前にサーバーの最新を取り、他端末で追加された名前が消えないように和集合にする（消したい名前は元の一覧から外した分だけ）
+      const fresh = await store.loadSettings();
+      const removed = origMembers.filter(m => !typed.includes(m));
+      s.members = [...new Set([...typed, ...fresh.members.filter(m => !removed.includes(m))])];
+      await store.saveSettings(s);
+    } catch { $('#sSave').disabled = false; return; }
     for (const f of flyers) S.filter.flyers.add(f.id);
     closeSheet(); renderAll(); toast('設定を保存しました');
   };
@@ -858,7 +930,8 @@ function toggleBoards(on) {
   S.boardsOn = on ?? !S.boardsOn;
   if (S.boardsOn && S.spotBarOn) toggleSpotBar(false);
   $('#boardBar').hidden = !S.boardsOn;
-  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; if (S.boardsOn) setLegend(false);
+  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn || S.assignBarOn; if (S.boardsOn) setLegend(false);
+  if (S.boardsOn && S.assignBarOn) toggleAssignBar(false);
   if (!S.boardsOn) { setBoardAdding(false); S.infoWin.close(); }
   renderBoards();
 }
@@ -936,7 +1009,7 @@ async function showBoard(b) {
   `);
   let status = b.status;
   $('#sheetBody').querySelectorAll('.stTabs button').forEach(btn => btn.onclick = () => { status = btn.dataset.st; $('#sheetBody').querySelectorAll('.stTabs button').forEach(x => x.classList.toggle('on', x === btn)); });
-  if (b.photo_path) { const url = await store.photoUrl(b.photo_path); $('#bPhotoBox').innerHTML = url ? `<img src="${url}" alt="貼付写真">` : '<div class="small">写真を表示できません</div>'; }
+  if (b.photo_path) { const url = await store.photoUrl(b.photo_path); $('#bPhotoBox').innerHTML = url ? `<img src="${esc(url)}" alt="貼付写真">` : '<div class="small">写真を表示できません</div>'; }
   let newBlob = null;
   $('#bPhoto').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
@@ -1004,9 +1077,10 @@ function toggleSpotBar(on) {
   S.spotBarOn = on ?? !S.spotBarOn;
   if (S.spotBarOn && S.boardsOn) toggleBoards(false);
   $('#spotBar').hidden = !S.spotBarOn;
-  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; if (S.spotBarOn) setLegend(false);
+  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn || S.assignBarOn; if (S.spotBarOn) setLegend(false);
   if (!S.spotBarOn) setSpotAdding(false);
-  renderSpots();
+  if (S.spotBarOn && S.assignBarOn) toggleAssignBar(false);
+  renderSpots(); renderStations();
 }
 function setSpotAdding(on) {
   S.spotAdding = on; if (on) S.boardAdding = false;
@@ -1098,9 +1172,11 @@ function openEventForm(sp, ev) {
     <div class="btnRow"><button class="ghost" id="evCancel">やめる</button><button class="primary" id="evSave">保存する</button></div>
   `);
   $('#evCancel').onclick = () => showSpot(sp);
+  const evId = ev.id || uid();
   $('#evSave').onclick = async () => {
-    const e = { id: ev.id || uid(), spot_id: sp.id, date: $('#evDate').value || today(), time: $('#evTime').value.trim(), member: $('#evMember').value, memo: $('#evMemo').value.trim(), done: isDone };
-    try { await store.saveEvent(e); } catch { return; }
+    $('#evSave').disabled = true;
+    const e = { id: evId, spot_id: sp.id, date: $('#evDate').value || today(), time: $('#evTime').value.trim(), member: $('#evMember').value, memo: $('#evMemo').value.trim(), done: isDone };
+    try { await store.saveEvent(e); } catch { $('#evSave').disabled = false; return; }
     S.events = await store.loadEvents(); renderSpots(); showSpot(sp); toast('保存しました');
   };
 }
@@ -1230,12 +1306,182 @@ function showSearchSheet(it) {
   $('#ssBoard').onclick = () => { toggleBoards(true); if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } addBoardForm(new google.maps.LatLng(it.lat, it.lng)); setTimeout(() => { const n = $('#bPlace'); if (n && !n.value) n.value = it.name; }, 50); };
 }
 
+/* ---------------- 配布の割り当て（予定エリア） ---------------- */
+function toggleAssignBar(on) {
+  S.assignBarOn = on ?? !S.assignBarOn;
+  if (S.assignBarOn) { if (S.boardsOn) toggleBoards(false); if (S.spotBarOn) toggleSpotBar(false); }
+  $('#assignBar').hidden = !S.assignBarOn;
+  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn || S.assignBarOn; if (S.assignBarOn) setLegend(false);
+  renderAssignments();
+}
+function renderAssignments() {
+  ensureLabelClass();
+  for (const p of S.asgPolys.values()) p.setMap(null); S.asgPolys.clear();
+  for (const l of S.asgLabels) l.setMap(null); S.asgLabels = [];
+  const open = S.assignments.filter(a => a.status !== 'done');
+  const mine = open.filter(a => a.member === S.user).length;
+  $('#assignStat').textContent = `割り当て 未完了 ${open.length}件（自分 ${mine}）`;
+  const showLabels = S.map.getZoom() >= 14;
+  for (const a of open) {
+    const isMine = a.member === S.user;
+    const col = isMine ? '#ffd60a' : '#cbd5e1';
+    const poly = new google.maps.Polygon({ paths: a.polygon.map(([lng, lat]) => ({ lat, lng })), strokeColor: col, strokeOpacity: 1, strokeWeight: 3, fillColor: col, fillOpacity: isMine ? 0.18 : 0.08, map: S.map, zIndex: 1, icons: undefined });
+    poly.addListener('click', ev => { if (!S.drawing && !S.pin) showAssignment(a); });
+    S.asgPolys.set(a.id, poly);
+    if (showLabels) {
+      const c = turf.centerOfMass(turf.polygon([a.polygon])).geometry.coordinates;
+      const f = a.flyer_id ? flyerOf(a.flyer_id) : null;
+      const html = `📋 <b>${esc(a.member || '担当未定')}</b>${a.due ? ` 〜${fmtDate(a.due)}` : ''}<br>${f ? esc(f.name) : 'チラシ未定'}${a.est_setai ? ` 約${a.est_setai}世帯` : ''}`;
+      const lb = new RecLabel({ lat: c[1], lng: c[0] }, html, col); lb.setMap(S.map); lb.getDivClass = 'asgLabel';
+      S.asgLabels.push(lb);
+      setTimeout(() => { if (lb.div) { lb.div.className = 'asgLabel' + (isMine ? '' : ' other'); lb.div.style.borderColor = ''; } }, 0);
+    }
+  }
+}
+function startAssignDraw() {
+  if ($('#fab').disabled) { toast('告示日を過ぎているため作成できません'); return; }
+  S.drawPurpose = 'assign'; startDrawing();
+  setTimeout(() => { const h = $('#drawHint'); if (h && S.drawing) h.textContent = '割り当てる範囲を囲んでください（' + h.textContent + '）'; }, 0);
+}
+function openAssignForm(a) {
+  const isNew = !a.id;
+  const poly = turf.polygon([a.polygon]); const est = estimateRecord(poly);
+  openSheet(`
+    <h3>${isNew ? '配布の割り当てを作る' : '割り当てを編集'}</h3>
+    <div class="small">推定 <b>${est.setai}</b> 世帯 ／ ${esc(est.town)}</div>
+    <label>担当者<select id="aMember"><option value="">（未定・誰でも）</option>${S.settings.members.map(m => `<option ${a.member === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
+    <label>配るチラシ<select id="aFlyer"><option value="">（未定）</option>${S.settings.flyers.map(f => `<option value="${f.id}" ${a.flyer_id === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>
+    <label>期限（任意）<input id="aDue" type="date" value="${esc(a.due || '')}"></label>
+    <label>メモ（任意）<input id="aNote" type="text" value="${esc(a.note || '')}" placeholder="例：団地は管理人に一声かけてから"></label>
+    <div class="btnRow"><button class="ghost" id="aCancel">やめる</button><button class="primary" id="aSave">保存する</button></div>
+  `);
+  $('#aCancel').onclick = closeSheet;
+  $('#aSave').onclick = async () => {
+    const na = { ...a, id: a.id || uid(), member: $('#aMember').value || null, flyer_id: $('#aFlyer').value || null, due: $('#aDue').value || null, note: $('#aNote').value.trim(), status: a.status || 'planned', est_setai: est.setai, town: est.town, created_by: a.created_by || S.user };
+    $('#aSave').disabled = true;
+    try { await store.saveAssignment(na); } catch { $('#aSave').disabled = false; return; }
+    S.assignments = await store.loadAssignments(); closeSheet(); renderAssignments(); toast('割り当てを保存しました');
+  };
+}
+function showAssignment(a) {
+  const f = a.flyer_id ? flyerOf(a.flyer_id) : null;
+  openSheet(`
+    <h3>📋 ${esc(a.member || '担当未定')}${a.due ? `　〜${esc(a.due)}` : ''}</h3>
+    <dl class="kv">
+      <dt>チラシ</dt><dd>${f ? esc(f.name) : '未定'}</dd>
+      <dt>推定世帯</dt><dd>${(a.est_setai ?? 0).toLocaleString()} 世帯（${esc(a.town || '')}）</dd>
+      ${a.note ? `<dt>メモ</dt><dd>${esc(a.note)}</dd>` : ''}
+      <dt>作成</dt><dd>${esc(a.created_by || '')}</dd>
+    </dl>
+    <div class="btnRow"><button class="primary" id="asRecord">✅ この範囲で配布を記録する</button></div>
+    <div class="btnRow"><button class="ghost" id="asDone">記録せず完了にする</button><button class="ghost" id="asEdit">編集</button><button class="ghost" id="asDel" style="color:var(--danger)">削除</button><button class="ghost" id="asClose">閉じる</button></div>
+  `);
+  $('#asClose').onclick = closeSheet;
+  $('#asEdit').onclick = () => openAssignForm(a);
+  $('#asRecord').onclick = () => { if ($('#fab').disabled) { toast('告示日を過ぎているため登録できません'); return; } openRecordForm({ polygon: a.polygon, flyer_id: a.flyer_id || undefined, member: a.member || S.user, from_assignment: a.id }); };
+  $('#asDone').onclick = async () => { try { await store.saveAssignment({ ...a, status: 'done' }); } catch { return; } S.assignments = await store.loadAssignments(); closeSheet(); renderAssignments(); toast('完了にしました'); };
+  $('#asDel').onclick = async () => { if (!confirm('この割り当てを削除しますか？')) return; try { await store.deleteAssignment(a.id); } catch { return; } S.assignments = await store.loadAssignments(); closeSheet(); renderAssignments(); toast('削除しました'); };
+}
+function showAssignList() {
+  const rows = [...S.assignments].sort((x, y) => (x.status === 'done') - (y.status === 'done') || String(x.due || '9999').localeCompare(String(y.due || '9999')));
+  openSheet(`
+    <h3>配布の割り当て一覧</h3>
+    <div class="small">未完了 ${rows.filter(a => a.status !== 'done').length} ／ 完了 ${rows.filter(a => a.status === 'done').length}</div>
+    <div class="tableWrap"><table><thead><tr><th>状態</th><th>担当</th><th>期限</th><th>チラシ</th><th>主な町丁目</th><th>世帯</th></tr></thead><tbody>
+    ${rows.map(a => `<tr data-id="${a.id}"><td>${a.status === 'done' ? '✅' : '⬜'}</td><td>${esc(a.member || '未定')}</td><td>${a.due ? fmtDate(a.due) : ''}</td><td>${a.flyer_id ? esc(flyerOf(a.flyer_id).name) : ''}</td><td>${esc(a.town || '')}</td><td>${a.est_setai ?? ''}</td></tr>`).join('') || '<tr><td colspan="6" class="small">まだありません。「＋ 割り当てを作る」で範囲を囲んでください</td></tr>'}
+    </tbody></table></div>
+    <div class="btnRow"><button class="primary" id="alClose">閉じる</button></div>
+  `);
+  $('#alClose').onclick = closeSheet;
+  $('#sheetBody').querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => { const a = S.assignments.find(x => x.id === tr.dataset.id); if (!a) return; const c = turf.centerOfMass(turf.polygon([a.polygon])).geometry.coordinates; S.map.panTo({ lat: c[1], lng: c[0] }); showAssignment(a); });
+}
+
+/* ---------------- 駅レイヤー（愛知9区の鉄道駅） ---------------- */
+function renderStations() {
+  for (const m of S.stationMarkers) m.setMap(null); S.stationMarkers = [];
+  if (!S.spotBarOn || !S.stationsOn || !S.stations.length) return;
+  for (const st of S.stations) {
+    // 既に拠点として登録済みの駅（150m以内・名前一致）は出さない
+    if (S.spots.some(sp => sp.name.includes(st.name) && Math.hypot((sp.lat - st.lat) * 111000, (sp.lng - st.lng) * 91000) < 150)) continue;
+    const m = new google.maps.Marker({ position: { lat: st.lat, lng: st.lng }, map: S.map, zIndex: 25,
+      icon: { path: google.maps.SymbolPath.CIRCLE, scale: 12, fillColor: '#fff', fillOpacity: 0.95, strokeColor: '#1d4ed8', strokeWeight: 2 }, label: { text: '🚉', fontSize: '14px' }, title: `${st.name}駅（${st.city}）` });
+    m.addListener('click', () => { if (S.spotAdding || S.pin) return; openSheet(`
+      <h3>🚉 ${esc(st.name)}駅</h3><div class="small">${esc(st.city)}${st.operator ? ' ／ ' + esc(st.operator) : ''}</div>
+      <div class="btnRow"><button class="primary" id="stAdd">🎤 ここを辻立ち拠点に登録</button><button class="ghost" id="stClose">閉じる</button></div>`);
+      $('#stClose').onclick = closeSheet;
+      $('#stAdd').onclick = () => { addSpotForm(new google.maps.LatLng(st.lat, st.lng)); setTimeout(() => { const n = $('#spName'); if (n) n.value = `${st.name}駅`; }, 30); };
+    });
+    S.stationMarkers.push(m);
+  }
+}
+
+/* ---------------- LINE用まとめ（コピー） ---------------- */
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toast('コピーしました。LINEに貼り付けてください'); }
+  catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); toast('コピーしました'); } catch { prompt('長押しでコピーしてください', text); } ta.remove(); }
+}
+function summaryText(recs) {
+  const per = S.filter.period; const label = per === 'all' ? '全期間' : `直近${per}日`;
+  const tot = flyerTotals();
+  const byF = {}; for (const r of recs) byF[r.flyer_id] = (byF[r.flyer_id] || 0) + r.count;
+  const lines = [`【配布まとめ】${today().slice(5).replace('-', '/')} 時点（${label}）`];
+  for (const [k, v] of Object.entries(byF)) { const t = tot.find(x => x.id === k); lines.push(`・${flyerOf(k).name}：${v.toLocaleString()}枚${t?.total ? `（残り ${t.remain.toLocaleString()}／${t.total.toLocaleString()}）` : ''}`); }
+  lines.push('――');
+  const sorted = [...recs].sort((a, b) => a.date.localeCompare(b.date));
+  for (const r of sorted) lines.push(`${fmtDate(r.date)} ${r.member}　${flyerOf(r.flyer_id).name} ${r.count.toLocaleString()}枚　${r.town || ''}${r.memo ? '（' + r.memo + '）' : ''}`);
+  return lines.join('\n');
+}
+
+/* ---------------- 掲示場一覧の貼り付け取り込み ---------------- */
+function openBoardImport() {
+  const cities = (S.settings.cities || DEFAULT_CITIES).map(c => c.split('_')[1]).filter(Boolean);
+  openSheet(`
+    <h3>掲示場一覧を貼り付けて取り込む</h3>
+    <div class="small">選管の一覧（PDFやExcel）から、1行に「番号　住所や目標物」の形でコピーして貼り付けてください。住所から地図の位置を自動で探します（国土地理院の無料検索）。</div>
+    <label>種類<select id="imKind"><option value="official">選挙用ポスター掲示場</option><option value="general">一般ポスター</option></select></label>
+    <label>市町村（住所の頭に付けて検索します）<select id="imCity">${cities.map(c => `<option>${esc(c)}</option>`).join('')}</select></label>
+    <label>一覧（1行1か所）<textarea id="imText" rows="6" placeholder="1　宇治町字○○123　宇治町公民館前&#10;2　青塚町五丁目45　青塚公園南側"></textarea></label>
+    <div class="btnRow"><button class="ghost" id="imCancel">やめる</button><button class="primary" id="imRun">位置を探す</button></div>
+    <div id="imResult"></div>
+  `);
+  $('#imCancel').onclick = closeSheet;
+  $('#imRun').onclick = async () => {
+    const city = $('#imCity').value, kind = $('#imKind').value;
+    const lines = $('#imText').value.split(/\n+/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length) { toast('一覧を貼り付けてください'); return; }
+    $('#imRun').disabled = true;
+    const res = []; const box = $('#imResult');
+    const inAichi = (lat, lng) => lat > 34.5 && lat < 35.5 && lng > 136.5 && lng < 138.0;
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^(\d+)[\s.．:：、,)）-]*(.*)$/); const no = m ? m[1] : String(i + 1); const text = (m ? m[2] : lines[i]).trim();
+      box.innerHTML = `<div class="small">探しています… ${i + 1} / ${lines.length}</div>`;
+      let hit = null;
+      for (const q of [`${city} ${text}`, `${city} ${text.split(/\s+/)[0]}`, text]) {
+        try { const d = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(q)).then(r => r.json()); hit = (d || []).find(f => inAichi(f.geometry.coordinates[1], f.geometry.coordinates[0]) && !/^愛知県(海部郡)?[^市町村]{1,6}[市町村]$/.test(f.properties.title || '')); } catch { }
+        if (hit) break;
+      }
+      res.push({ no, text, hit: hit ? { lat: hit.geometry.coordinates[1], lng: hit.geometry.coordinates[0], title: hit.properties.title } : null });
+      await new Promise(r => setTimeout(r, 250));
+    }
+    const ok = res.filter(r => r.hit).length;
+    box.innerHTML = `<div class="small" style="margin:8px 0">${ok} / ${res.length} 件の位置が見つかりました。見つからなかった行は「＋ 場所を追加」で手で置いてください。</div>
+      ${res.map(r => `<div class="impRow"><b>${esc(r.no)}</b><span>${esc(r.text)}<br><span class="small">${r.hit ? '→ ' + esc(r.hit.title) : '位置が見つかりません'}</span></span><span class="${r.hit ? 'ok' : 'ng'}">${r.hit ? '✓' : '✗'}</span></div>`).join('')}
+      <div class="btnRow"><button class="ghost" id="imCopyNg">見つからない行をコピー</button><button class="primary" id="imSave" ${ok ? '' : 'disabled'}>${ok}件を取り込む</button></div>`;
+    $('#imCopyNg').onclick = () => copyText(res.filter(r => !r.hit).map(r => `${r.no}\t${r.text}`).join('\n') || '（すべて見つかりました）');
+    $('#imSave').onclick = async () => {
+      $('#imSave').disabled = true;
+      try { for (const r of res) if (r.hit) await store.saveBoard({ id: uid(), kind, no: r.no, place: r.text, lat: +r.hit.lat.toFixed(6), lng: +r.hit.lng.toFixed(6), status: 'todo', memo: '一覧から取り込み（位置は要確認）' }); } catch { return; }
+      S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast(`${ok}件を取り込みました。ピンの位置がずれていれば「位置を直す」で調整してください`, 4000);
+    };
+  };
+}
+
 /* ---------------- UI バインド ---------------- */
 function bindUI() {
   $('#periodSel').value = S.filter.period;
   $('#periodSel').onchange = e => { S.filter.period = e.target.value; renderAll(); };
   $('#fab').onclick = startDrawing;
-  $('#btnDrawCancel').onclick = cancelDrawing;
+  $('#btnDrawCancel').onclick = () => { S.drawPurpose = 'record'; cancelDrawing(); };
   $('#btnDrawRedo').onclick = () => setDrawMode(S.drawing.mode);
   $('#btnDrawUndo').onclick = () => { const d = S.drawing; d.ll.pop(); redrawTap(); };
   $('#btnDrawDone').onclick = commitDrawing;
@@ -1260,9 +1506,15 @@ function bindUI() {
   $('#btnSpotAdd').onclick = () => { closeSheet(); setSpotAdding(true); };
   $('#btnSpotAddCancel').onclick = () => setSpotAdding(false);
   $('#btnSpotList').onclick = showSpotList;
+  $('#btnAssign').onclick = () => { $('#menu').hidden = true; toggleAssignBar(true); };
+  $('#btnAssignClose').onclick = () => toggleAssignBar(false);
+  $('#btnAssignAdd').onclick = startAssignDraw;
+  $('#btnAssignList').onclick = showAssignList;
+  $('#btnStations').onclick = () => { S.stationsOn = !S.stationsOn; $('#btnStations').classList.toggle('on', S.stationsOn); renderStations(); };
+  $('#btnBoardImport').onclick = openBoardImport;
   $('#btnPinCancel').onclick = () => endPinPlace(false);
   $('#btnPinOk').onclick = () => endPinPlace(true);
-  $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; localStorage.removeItem('cm_user'); showLogin(); };
+  $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; let saved = null; try { saved = JSON.parse(localStorage.getItem('cm_user') || 'null'); } catch { } localStorage.removeItem('cm_user'); showLogin(null, USE_SUPABASE && saved?.pass ? { verified: true, pass: saved.pass } : {}); };
   $('#sheetHandle').onclick = closeSheet;
   $('#legendBtn').onclick = () => setLegend(!S.legendOpen);
   $('#btnSearch').onclick = () => { if ($('#searchBox').hidden) openSearch(); else closeSearch(); };

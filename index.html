@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="配布MAP">
-<link rel="stylesheet" href="style.css?v=20260907212959">
+<link rel="stylesheet" href="style.css?v=20260907224626">
 </head>
 <body>
 
@@ -68,6 +68,7 @@
       <span id="boardStat"></span>
       <select id="boardKindSel" aria-label="表示する種類"><option value="all">両方</option><option value="official">掲示場のみ</option><option value="general">一般ポスターのみ</option></select>
       <button id="btnBoardAdd" class="ghost">＋ 場所を追加</button>
+      <button id="btnBoardImport" class="ghost">📥 一覧を貼り付け</button>
       <button id="btnBoardList" class="ghost">一覧</button>
       <button id="btnBoardClose" class="ghost">✕ 閉じる</button>
     </div>
@@ -79,10 +80,21 @@
     <div class="boardBarRow">
       <span id="spotStat"></span>
       <button id="btnSpotAdd" class="ghost">＋ 場所を追加</button>
+      <button id="btnStations" class="ghost on">🚉 駅</button>
       <button id="btnSpotList" class="ghost">予定・実績</button>
       <button id="btnSpotClose" class="ghost">✕ 閉じる</button>
     </div>
     <div id="spotAddHint" hidden>事務所や辻立ちの場所を地図でタップしてください　<button id="btnSpotAddCancel" class="ghost small">やめる</button></div>
+  </div>
+
+  <!-- 配布の割り当てバー -->
+  <div id="assignBar" hidden>
+    <div class="boardBarRow">
+      <span id="assignStat"></span>
+      <button id="btnAssignAdd" class="ghost">＋ 割り当てを作る</button>
+      <button id="btnAssignList" class="ghost">一覧</button>
+      <button id="btnAssignClose" class="ghost">✕ 閉じる</button>
+    </div>
   </div>
 
   <!-- ピンの位置合わせ -->
@@ -124,7 +136,8 @@
     <button class="menuItem" data-view="list">📋 配布一覧・CSV</button>
     <button class="menuItem" data-view="towns">🏘 町丁目ごとの配布率</button>
     <button class="menuItem" id="btnBoards">📌 ポスター掲示場（看板）</button>
-    <button class="menuItem" id="btnSpots">🎤 拠点・辻立ちスポット</button>
+    <button class="menuItem" id="btnSpots">🎤 拠点・辻立ちスポット（駅）</button>
+    <button class="menuItem" id="btnAssign">📋 配布の割り当て（予定エリア）</button>
     <button class="menuItem" data-view="settings">⚙ 設定（チラシ・メンバー・告示日）</button>
     <button class="menuItem" id="btnSwitchUser">👤 名前を変える</button>
     <div class="menuFoot">
@@ -157,9 +170,9 @@
   <div id="toast" hidden></div>
 </div>
 
-<script src="config.js?v=20260907212959"></script>
+<script src="config.js?v=20260907224626"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
-<script src="app.js?v=20260907212959"></script>
+<script src="app.js?v=20260907224626"></script>
 </body>
 </html>
