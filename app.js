@@ -804,7 +804,7 @@ function showRecord(r, latLng) {
       <dt>面積</dt><dd>約 ${(r.area_m2 ?? 0).toLocaleString()} ㎡</dd>
       ${r.memo ? `<dt>メモ</dt><dd>${esc(r.memo)}</dd>` : ''}
     </dl>
-    <div class="btnRow"><button class="ghost" id="rDel">削除</button><button class="ghost" id="rShape">形を直す</button><button class="ghost" id="rEdit">内容を編集</button><button class="primary" id="rClose">閉じる</button></div>
+    <div class="btnRow"><button class="ghost" id="rDel">削除</button><button class="ghost" id="rShape">形を直す</button><button class="ghost" id="rEdit">編集</button><button class="primary" id="rClose">閉じる</button></div>
   `);
   $('#rClose').onclick = closeSheet;
   $('#rEdit').onclick = () => openRecordForm(r);
@@ -1546,6 +1546,16 @@ function bindUI() {
   $('#btnPinOk').onclick = () => endPinPlace(true);
   $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; let saved = null; try { saved = JSON.parse(localStorage.getItem('cm_user') || 'null'); } catch { } localStorage.removeItem('cm_user'); showLogin(null, USE_SUPABASE && saved?.pass ? { verified: true, pass: saved.pass } : {}); };
   $('#sheetHandle').onclick = closeSheet;
+  (() => {
+    const sheet = $('#sheet'), body = $('#sheetBody'); let sy = null, sx = null, dragging = false, moved = 0;
+    sheet.addEventListener('touchstart', e => { const t = e.touches[0]; sy = t.clientY; sx = t.clientX; moved = 0; dragging = (body.scrollTop <= 0); }, { passive: true });
+    sheet.addEventListener('touchmove', e => {
+      if (!dragging || sy == null) return; const t = e.touches[0]; const dy = t.clientY - sy, dx = Math.abs(t.clientX - sx);
+      if (dy > 0 && dy > dx) { moved = dy; sheet.style.transform = `translateY(${Math.min(dy, 400)}px)`; sheet.style.transition = 'none'; if (e.cancelable) e.preventDefault(); }
+    }, { passive: false });
+    const end = () => { if (sy == null) return; sheet.style.transition = ''; if (moved > 90) closeSheet(); sheet.style.transform = ''; sy = null; moved = 0; dragging = false; };
+    sheet.addEventListener('touchend', end); sheet.addEventListener('touchcancel', end);
+  })();
   $('#legendBtn').onclick = () => setLegend(!S.legendOpen);
   $('#btnSearch').onclick = () => { if ($('#searchBox').hidden) openSearch(); else closeSearch(); };
   $('#searchClose').onclick = closeSearch;

@@ -133,7 +133,9 @@ h1,h2,h3{margin:0 0 8px}
 .menuFoot{margin-top:auto;padding:12px 16px calc(12px + var(--safe-bottom));font-size:11px;color:var(--muted);line-height:1.5}
 
 /* sheet */
-#sheet{position:absolute;left:0;right:0;bottom:0;z-index:25;background:var(--panel);border-radius:16px 16px 0 0;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 -8px 30px rgba(0,0,0,.5)}
+#sheet{position:absolute;left:0;right:0;bottom:0;z-index:25;background:var(--panel);border-radius:16px 16px 0 0;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 -8px 30px rgba(0,0,0,.5);transition:transform .15s ease-out;touch-action:pan-y}
+#sheetHandle{cursor:pointer}
+#sheet .btnRow button,#sheet .btnRow .linkBtn{white-space:nowrap;padding:12px 6px;font-size:14px}
 #sheetHandle{width:44px;height:5px;border-radius:3px;background:var(--border);margin:8px auto 0}
 #sheetBody{overflow:auto;padding:10px 16px calc(16px + var(--safe-bottom))}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:14px}
