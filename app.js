@@ -366,7 +366,7 @@ function ensureLabelClass() {
     constructor(pos, html, color) { super(); this.pos = pos; this.html = html; this.color = color; this.div = null; }
     onAdd() {
       const d = document.createElement('div'); d.className = 'recLabel'; d.style.borderColor = this.color; d.innerHTML = this.html;
-      this.div = d; this.getPanes().overlayLayer.appendChild(d);   // クリックはポリゴンへ通す
+      this.div = d; this.getPanes().floatPane.appendChild(d);   // 最前面。クリックはCSSでポリゴンへ通す
     }
     draw() {
       if (!this.div) return;

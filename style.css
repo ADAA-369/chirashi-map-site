@@ -116,7 +116,7 @@ h1,h2,h3{margin:0 0 8px}
 #legend .sw{width:14px;height:10px;border-radius:2px;border:1px solid rgba(255,255,255,.5)}
 
 /* 記録ラベル */
-.recLabel{position:absolute;transform:translate(-50%,-50%);background:rgba(15,23,32,.82);color:#fff;border:2px solid;border-radius:10px;padding:4px 8px;font-size:12px;line-height:1.35;white-space:nowrap;text-align:center;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+.recLabel{position:absolute;transform:translate(-50%,-50%);background:rgba(10,16,24,.94);color:#fff;border:2px solid;border-radius:10px;padding:5px 9px;font-size:12.5px;line-height:1.35;white-space:nowrap;text-align:center;pointer-events:none;box-shadow:0 3px 12px rgba(0,0,0,.6);text-shadow:0 1px 1px #000}
 
 /* menu */
 #menu{position:absolute;inset:0 auto 0 0;width:min(84vw,340px);z-index:30;background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding-top:var(--safe-top);box-shadow:0 0 40px rgba(0,0,0,.6)}
