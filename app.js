@@ -79,7 +79,7 @@ const SupabaseStore = {
   // 15秒ごと＋画面復帰時に他の人の更新を取り込む
   subscribe(cb) {
     const tick = async () => {
-      if (document.hidden || S.drawing) return;
+      if (document.hidden || S.drawing || S.adjust) return;
       try {
         const [recs, sets] = await Promise.all([this.loadRecords(), this.loadSettings()]);
         const j = JSON.stringify([recs, sets]);
@@ -151,7 +151,8 @@ function showLogin(resolve) {
   const box = $('#login'); box.hidden = false;
   const needPass = USE_SUPABASE;
   $('#loginPass').hidden = !needPass;
-  $('#loginMsg').textContent = needPass ? 'LINEで届いた合言葉と、あなたの名前を入れてください' : 'あなたの名前を選んでください';
+  $('#loginMsg').textContent = needPass ? '合言葉を入れてください' : 'あなたの名前を選んでください';
+  $('#loginSub').hidden = !needPass;
   const sel = $('#selName'); const nameWrap = sel.closest('label');
   let verified = !needPass;
   const fillNames = () => {
@@ -360,23 +361,35 @@ function renderNotice() {
   else { b.className = 'lock'; b.textContent = `告示日（${nd}）を過ぎています。選挙運動期間中のポスティングは公職選挙法違反のため、新規登録を停止しています`; fab.disabled = true; }
 }
 
-/* ---------------- なぞり描き ---------------- */
+/* ---------------- 範囲の描画（なぞる／点で囲む）＋つまみ調整 ---------------- */
 function startDrawing() {
   if ($('#fab').disabled) return;
-  S.infoWin.close();
+  S.infoWin.close(); closeSheet();
   const layer = $('#drawLayer'), cv = $('#drawCanvas');
   layer.hidden = false;
   const rect = $('#map').getBoundingClientRect();
   cv.width = rect.width * devicePixelRatio; cv.height = rect.height * devicePixelRatio;
   const ctx = cv.getContext('2d'); ctx.scale(devicePixelRatio, devicePixelRatio);
-  S.drawing = { pts: [], ctx, rect, active: false };
-  $('#btnDrawDone').disabled = true;
-  $('#drawHint').textContent = '配った範囲を指でなぞって囲んでください';
+  S.drawing = { pts: [], ctx, rect, active: false, mode: S.drawMode || 'free', down: null };
+  setDrawMode(S.drawing.mode);
   $('#fab').hidden = true;
-  const onDown = e => { e.preventDefault(); S.drawing.active = true; S.drawing.pts = []; addPt(e); layer.setPointerCapture?.(e.pointerId); };
-  const onMove = e => { if (!S.drawing?.active) return; e.preventDefault(); addPt(e); };
-  const onUp = e => { if (!S.drawing?.active) return; S.drawing.active = false; finishStroke(); };
-  layer.onpointerdown = onDown; layer.onpointermove = onMove; layer.onpointerup = onUp; layer.onpointercancel = onUp;
+  layer.onpointerdown = e => {
+    e.preventDefault(); layer.setPointerCapture?.(e.pointerId);
+    const d = S.drawing; d.down = [e.clientX, e.clientY];
+    if (d.mode === 'free') { d.active = true; d.pts = []; addPt(e); }
+  };
+  layer.onpointermove = e => { const d = S.drawing; if (d?.mode === 'free' && d.active) { e.preventDefault(); addPt(e); } };
+  layer.onpointerup = layer.onpointercancel = e => {
+    const d = S.drawing; if (!d) return;
+    if (d.mode === 'free') { if (!d.active) return; d.active = false; finishStroke(); return; }
+    // 点で囲む：動かさずに離した時だけ点を追加
+    if (d.down && Math.hypot(e.clientX - d.down[0], e.clientY - d.down[1]) < 8) {
+      d.pts.push([e.clientX - d.rect.left, e.clientY - d.rect.top]); drawPreview(d.pts.length >= 3);
+      $('#btnDrawDone').disabled = d.pts.length < 3;
+      $('#drawHint').textContent = d.pts.length < 3 ? `角を順にタップ（あと${3 - d.pts.length}点以上）` : '角をタップして追加。よければ「これで決定」';
+    }
+    d.down = null;
+  };
   function addPt(e) {
     const x = e.clientX - S.drawing.rect.left, y = e.clientY - S.drawing.rect.top;
     const pts = S.drawing.pts;
@@ -384,23 +397,33 @@ function startDrawing() {
     pts.push([x, y]); drawPreview(false);
   }
 }
+function setDrawMode(mode) {
+  const d = S.drawing; S.drawMode = mode; if (!d) return;
+  d.mode = mode; d.pts = []; d.active = false; drawPreview(false);
+  $('#modeFree').classList.toggle('on', mode === 'free'); $('#modeTap').classList.toggle('on', mode === 'tap');
+  $('#btnDrawUndo').hidden = mode !== 'tap'; $('#btnDrawDone').disabled = true;
+  $('#drawHint').textContent = mode === 'free' ? '配った範囲を指でなぞって囲んでください' : '範囲の角を順にタップしてください';
+}
 function drawPreview(closed) {
-  const { ctx, rect, pts } = S.drawing;
+  const { ctx, rect, pts, mode } = S.drawing;
   ctx.clearRect(0, 0, rect.width, rect.height);
-  if (pts.length < 2) return;
-  ctx.lineWidth = 5; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  if (!pts.length) return;
+  ctx.lineWidth = 4; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   ctx.strokeStyle = '#00e5ff'; ctx.fillStyle = 'rgba(0,229,255,.25)';
-  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
-  for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
-  if (closed) { ctx.closePath(); ctx.fill(); }
-  ctx.stroke();
+  if (pts.length >= 2) {
+    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+    for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+    if (closed) { ctx.closePath(); ctx.fill(); }
+    ctx.stroke();
+  }
+  if (mode === 'tap') for (const [x, y] of pts) { ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 3; ctx.stroke(); }
 }
 function finishStroke() {
   const d = S.drawing;
   if (d.pts.length < 8) { d.pts = []; drawPreview(false); $('#drawHint').textContent = '短すぎます。もう少し大きく囲んでください'; return; }
   drawPreview(true);
   $('#btnDrawDone').disabled = false;
-  $('#drawHint').textContent = 'よければ「これで決定」、描き直すなら「描き直す」';
+  $('#drawHint').textContent = 'よければ「これで決定」（次の画面で角を調整できます）';
 }
 function cancelDrawing() {
   $('#drawLayer').hidden = true; $('#fab').hidden = false; S.drawing = null;
@@ -410,20 +433,41 @@ function commitDrawing() {
   let coords = d.pts.map(([x, y]) => { const ll = projection.fromContainerPixelToLatLng(new google.maps.Point(x, y)); return [ll.lng(), ll.lat()]; });
   coords.push(coords[0]);
   let poly = turf.polygon([coords]);
-  try { poly = turf.simplify(poly, { tolerance: 0.000015, highQuality: true }); } catch { }
-  // 自己交差は最大の部分だけ採用
+  if (d.mode === 'free') { try { poly = turf.simplify(poly, { tolerance: 0.00004, highQuality: true }); } catch { } }
   try {
-    const kinks = turf.kinks(poly);
-    if (kinks.features.length) {
-      const parts = turf.unkinkPolygon(poly).features;
-      parts.sort((a, b) => turf.area(b) - turf.area(a));
-      poly = parts[0];
+    if (turf.kinks(poly).features.length) {
+      const parts = turf.unkinkPolygon(poly).features; parts.sort((a, b) => turf.area(b) - turf.area(a)); poly = parts[0];
     }
   } catch { }
   const ring = poly.geometry.coordinates[0].map(([lng, lat]) => [+lng.toFixed(6), +lat.toFixed(6)]);
   if (ring.length < 4) { toast('形がうまく取れませんでした。描き直してください'); return; }
   cancelDrawing();
-  openRecordForm({ polygon: ring });
+  startAdjust(ring, null);
+}
+// つまみで形を調整（Googleマップ標準の編集ハンドル）
+function startAdjust(ring, rec) {
+  S.infoWin.close(); closeSheet();
+  for (const p of S.polys.values()) p.setOptions({ clickable: false });
+  const path = ring.slice(0, -1).map(([lng, lat]) => ({ lat, lng }));
+  const poly = new google.maps.Polygon({ paths: path, editable: true, draggable: false, strokeColor: '#00e5ff', strokeWeight: 3, fillColor: '#00e5ff', fillOpacity: 0.25, map: S.map, zIndex: 10 });
+  S.adjust = { poly, rec };
+  $('#adjustBar').hidden = false; $('#fab').hidden = true;
+  const b = turf.bbox(turf.polygon([ring]));
+  S.map.fitBounds(new google.maps.LatLngBounds({ lat: b[1], lng: b[0] }, { lat: b[3], lng: b[2] }), 60);
+}
+function endAdjust(ok) {
+  const a = S.adjust; if (!a) return;
+  let ring = null;
+  if (ok) {
+    ring = a.poly.getPath().getArray().map(ll => [+ll.lng().toFixed(6), +ll.lat().toFixed(6)]);
+    if (ring.length < 3) { toast('角が少なすぎます'); return; }
+    ring.push(ring[0]);
+    try { if (turf.kinks(turf.polygon([ring])).features.length) { toast('線が交差しています。交差しない形に直してください'); return; } } catch { }
+  }
+  a.poly.setMap(null); S.adjust = null;
+  $('#adjustBar').hidden = true; $('#fab').hidden = false;
+  for (const p of S.polys.values()) p.setOptions({ clickable: true });
+  if (ok) openRecordForm(a.rec ? { ...a.rec, polygon: ring } : { polygon: ring });
 }
 
 /* ---------------- ボトムシート ---------------- */
@@ -476,10 +520,11 @@ function showRecord(r, latLng) {
       <dt>面積</dt><dd>約 ${(r.area_m2 ?? 0).toLocaleString()} ㎡</dd>
       ${r.memo ? `<dt>メモ</dt><dd>${esc(r.memo)}</dd>` : ''}
     </dl>
-    <div class="btnRow"><button class="ghost" id="rDel">削除</button><button class="ghost" id="rEdit">編集</button><button class="primary" id="rClose">閉じる</button></div>
+    <div class="btnRow"><button class="ghost" id="rDel">削除</button><button class="ghost" id="rShape">形を直す</button><button class="ghost" id="rEdit">内容を編集</button><button class="primary" id="rClose">閉じる</button></div>
   `);
   $('#rClose').onclick = closeSheet;
   $('#rEdit').onclick = () => openRecordForm(r);
+  $('#rShape').onclick = () => { if ($('#fab').disabled) { toast('告示日を過ぎているため変更できません'); return; } startAdjust(r.polygon, r); };
   $('#rDel').onclick = async () => {
     if (!confirm(`${r.date} ${r.member} ${f.name} ${r.count}枚 の記録を削除しますか？`)) return;
     try { await store.deleteRecord(r.id); } catch { return; }
@@ -577,8 +622,13 @@ function bindUI() {
   $('#periodSel').onchange = e => { S.filter.period = e.target.value; renderAll(); };
   $('#fab').onclick = startDrawing;
   $('#btnDrawCancel').onclick = cancelDrawing;
-  $('#btnDrawRedo').onclick = () => { S.drawing.pts = []; drawPreview(false); $('#btnDrawDone').disabled = true; $('#drawHint').textContent = '配った範囲を指でなぞって囲んでください'; };
+  $('#btnDrawRedo').onclick = () => setDrawMode(S.drawing.mode);
+  $('#btnDrawUndo').onclick = () => { const d = S.drawing; d.pts.pop(); drawPreview(d.pts.length >= 3); $('#btnDrawDone').disabled = d.pts.length < 3; };
   $('#btnDrawDone').onclick = commitDrawing;
+  $('#modeFree').onclick = () => setDrawMode('free');
+  $('#modeTap').onclick = () => setDrawMode('tap');
+  $('#btnAdjustCancel').onclick = () => endAdjust(false);
+  $('#btnAdjustOk').onclick = () => endAdjust(true);
   $('#btnMenu').onclick = () => { $('#menu').hidden = false; $('#menuUser').textContent = `👤 ${S.user || ''}`; };
   $('#btnMenuClose').onclick = () => $('#menu').hidden = true;
   document.querySelectorAll('.menuItem[data-view]').forEach(b => b.onclick = () => {
