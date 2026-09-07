@@ -497,7 +497,7 @@ function startDrawing() {
   S.drawing = { pts: [], ll: [], ctx, rect, active: false, mode: S.drawMode || 'tap', down: null, vMarkers: [], mMarkers: [], line: null, poly: null, closeLine: null };
   setAddingUI(true);   // 町丁目・ポリゴン・ピンがタップを横取りしないように
   setDrawMode(S.drawing.mode);
-  $('#fab').hidden = true; setLegend(false); $('#legendBtn').hidden = true; $('#zoomBtns').hidden = true;
+  $('#fab').hidden = true; setLegend(false); $('#legendBtn').hidden = true; $('#zoomBtns').hidden = true; $('#centerMark').hidden = true;
   const pos = e => [e.clientX - S.drawing.rect.left, e.clientY - S.drawing.rect.top];
   // なぞるモード（キャンバス）
   layer.onpointerdown = e => {
@@ -602,7 +602,7 @@ function finishStroke() {
 function cancelDrawing() {
   clearTapShapes(); if (S.drawing?.mapClick) google.maps.event.removeListener(S.drawing.mapClick);
   $('#drawLayer').hidden = true; $('#fab').hidden = false; S.drawing = null; setAddingUI(false);
-  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; $('#zoomBtns').hidden = false;
+  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; $('#zoomBtns').hidden = false; $('#centerMark').hidden = false;
 }
 function commitDrawing() {
   const d = S.drawing; if (!d) return;
