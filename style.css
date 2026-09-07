@@ -15,7 +15,7 @@ h1,h2,h3{margin:0 0 8px}
 /* top bar */
 #topbar{position:relative;z-index:5;background:var(--panel);padding:calc(6px + var(--safe-top)) 8px 6px;border-bottom:1px solid var(--border)}
 #topbar .row{display:flex;align-items:center;gap:8px}
-#title{flex:1;font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#title{flex:1;font-weight:700;font-size:14px;line-height:1.2;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 #periodSel{width:auto;padding:6px 8px;font-size:13px}
 .icon{width:36px;height:36px;border-radius:8px;font-size:20px;display:grid;place-items:center}
 .icon:active{background:var(--panel2)}
