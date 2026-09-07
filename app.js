@@ -165,6 +165,10 @@ function toast(msg, ms = 2200) { const t = $('#toast'); t.textContent = msg; t.h
 
 /* ---------------- 起動 ---------------- */
 window.addEventListener('DOMContentLoaded', init);
+document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
+document.addEventListener('gesturechange', e => e.preventDefault(), { passive: false });
+let _lastTouchEnd = 0;
+document.addEventListener('touchend', e => { const now = Date.now(); if (now - _lastTouchEnd < 300 && !e.target.closest('#map')) e.preventDefault(); _lastTouchEnd = now; }, { passive: false });
 window.addEventListener('error', e => { console.error(e.error || e.message); toast('エラー: ' + (e.message || '不明').slice(0, 80), 5000); });
 window.addEventListener('unhandledrejection', e => { console.error(e.reason); toast('エラー: ' + String(e.reason?.message || e.reason).slice(0, 80), 5000); });
 
@@ -260,7 +264,7 @@ async function initMap() {
   S.map = new Map($('#map'), {
     center: view.center, zoom: view.zoom,
     mapTypeId: 'hybrid', tilt: 0,
-    disableDefaultUI: true, zoomControl: true, mapTypeControl: true,
+    disableDefaultUI: true, zoomControl: false, mapTypeControl: true,
     mapTypeControlOptions: { mapTypeIds: ['hybrid', 'roadmap'], position: google.maps.ControlPosition.RIGHT_TOP },
     gestureHandling: 'greedy', clickableIcons: false,
   });
@@ -273,6 +277,17 @@ async function initMap() {
   Object.assign(loc.style, { width: '40px', height: '40px', margin: '10px', borderRadius: '8px', fontSize: '20px', background: '#fff', color: '#333', boxShadow: '0 1px 4px rgba(0,0,0,.3)' });
   loc.onclick = () => navigator.geolocation?.getCurrentPosition(p => { S.map.panTo({ lat: p.coords.latitude, lng: p.coords.longitude }); S.map.setZoom(17); }, () => toast('現在地を取得できませんでした'), { enableHighAccuracy: true, timeout: 8000 });
   S.map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(loc);
+  $('#zoomIn').onclick = () => S.map.setZoom(S.map.getZoom() + 1);
+  $('#zoomOut').onclick = () => S.map.setZoom(S.map.getZoom() - 1);
+  // 長押しで拠点／掲示場を追加（バーを開いている時）
+  const mapEl = $('#map'); let lp = null;
+  mapEl.addEventListener('pointerdown', e => {
+    if (!(S.spotBarOn || S.boardsOn) || S.drawing || S.adjust) return;
+    const sx = e.clientX, sy = e.clientY;
+    lp = { timer: setTimeout(() => { lp = null; const r = mapEl.getBoundingClientRect(); const ll = S.proj.getProjection().fromContainerPixelToLatLng(new google.maps.Point(sx - r.left, sy - r.top)); if (navigator.vibrate) navigator.vibrate(30); if (S.spotBarOn) addSpotAt(ll); else addBoardAt(ll); }, 650), sx, sy };
+  }, { capture: true });
+  const cancelLp = e => { if (lp && (e.type !== 'pointermove' || Math.hypot(e.clientX - lp.sx, e.clientY - lp.sy) > 10)) { clearTimeout(lp.timer); lp = null; } };
+  mapEl.addEventListener('pointermove', cancelLp, { capture: true }); mapEl.addEventListener('pointerup', cancelLp, { capture: true }); mapEl.addEventListener('pointercancel', cancelLp, { capture: true });
   S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); });
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
@@ -301,7 +316,18 @@ async function loadTowns() {
 }
 function styleTowns() {
   const z = S.map.getZoom();
-  S.map.data.setStyle({ visible: z >= 14, strokeColor: '#ffffff', strokeOpacity: z >= 16 ? 0.55 : 0.35, strokeWeight: 1, fillOpacity: 0, clickable: z >= 14, zIndex: 1 });
+  const adding = S.boardAdding || S.spotAdding;
+  S.map.data.setStyle({ visible: z >= 14, strokeColor: '#ffffff', strokeOpacity: z >= 16 ? 0.55 : 0.35, strokeWeight: 1, fillOpacity: 0, clickable: z >= 14 && !adding, zIndex: 1 });
+}
+// 追加モード：ポリゴンやピンがタップを横取りしないようにする
+function setAddingUI(on) {
+  styleTowns();
+  for (const p of S.polys.values()) p.setOptions({ clickable: !on });
+  for (const p of S.overlapPolys) p.setOptions({ clickable: false });
+  for (const m of S.boardMarkers.values()) m.setOptions({ clickable: !on });
+  for (const m of S.spotMarkers.values()) m.setOptions({ clickable: !on });
+  S.map.setOptions({ draggableCursor: on ? 'crosshair' : null });
+  if (on) { S.infoWin.close(); closeSheet(); }
 }
 function showTownInfo(town, latLng) {
   if (!town || S.drawing) return;
@@ -472,7 +498,7 @@ function startDrawing() {
   const ctx = cv.getContext('2d'); ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
   S.drawing = { pts: [], ctx, rect, active: false, mode: S.drawMode || 'tap', down: null, dragIdx: null, dragMoved: false, dragInserted: false };
   setDrawMode(S.drawing.mode);
-  $('#fab').hidden = true;
+  $('#fab').hidden = true; setLegend(false); $('#legendBtn').hidden = true; $('#zoomBtns').hidden = true;
   const pos = e => [e.clientX - S.drawing.rect.left, e.clientY - S.drawing.rect.top];
   const near = (pts, x, y, r) => { let best = -1, bd = r; pts.forEach(([px, py], i) => { const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; } }); return best; };
   layer.onpointerdown = e => {
@@ -572,6 +598,7 @@ function finishStroke() {
 }
 function cancelDrawing() {
   $('#drawLayer').hidden = true; $('#fab').hidden = false; S.drawing = null;
+  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; $('#zoomBtns').hidden = false;
 }
 function commitDrawing() {
   const d = S.drawing; if (!d) return;
@@ -598,7 +625,7 @@ function startAdjust(ring, rec) {
   const path = ring.slice(0, -1).map(([lng, lat]) => ({ lat, lng }));
   const poly = new google.maps.Polygon({ paths: path, editable: true, draggable: false, strokeColor: '#00e5ff', strokeWeight: 3, fillColor: '#00e5ff', fillOpacity: 0.25, map: S.map, zIndex: 10 });
   S.adjust = { poly, rec };
-  $('#adjustBar').hidden = false; $('#fab').hidden = true;
+  $('#adjustBar').hidden = false; $('#fab').hidden = true; setLegend(false); $('#legendBtn').hidden = true;
   const b = turf.bbox(turf.polygon([ring]));
   S.map.fitBounds(new google.maps.LatLngBounds({ lat: b[1], lng: b[0] }, { lat: b[3], lng: b[2] }), 60);
 }
@@ -612,7 +639,7 @@ function endAdjust(ok) {
     try { if (turf.kinks(turf.polygon([ring])).features.length) { toast('線が交差しています。交差しない形に直してください'); return; } } catch { }
   }
   a.poly.setMap(null); S.adjust = null;
-  $('#adjustBar').hidden = true; $('#fab').hidden = false;
+  $('#adjustBar').hidden = true; $('#fab').hidden = false; $('#legendBtn').hidden = S.boardsOn || S.spotBarOn;
   for (const p of S.polys.values()) p.setOptions({ clickable: true });
   if (ok) openRecordForm(a.rec ? { ...a.rec, polygon: ring } : { polygon: ring });
 }
@@ -775,21 +802,20 @@ function showSettings() {
 const BOARD_STYLE = { todo: { color: '#9aa7b4', label: '未' }, done: { color: '#3fb950', label: '済' }, check: { color: '#f2a93b', label: '？' } };
 const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: '掲示場', path: () => google.maps.SymbolPath.CIRCLE, scale: 13 }, general: { name: '一般ポスター（支援者宅・店舗など）', short: '一般', path: () => 'M -9,-9 L 9,-9 L 9,9 L -9,9 Z', scale: 1 } };
 S.boardKindFilter = 'all';
+function setLegend(open) { S.legendOpen = open; $('#legend').hidden = !open; $('#legendBtn').classList.toggle('on', open); }
 function toggleBoards(on) {
   S.boardsOn = on ?? !S.boardsOn;
   if (S.boardsOn && S.spotBarOn) toggleSpotBar(false);
   $('#boardBar').hidden = !S.boardsOn;
-  $('#legend').hidden = S.boardsOn;
+  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; if (S.boardsOn) setLegend(false);
   if (!S.boardsOn) { setBoardAdding(false); S.infoWin.close(); }
   renderBoards();
 }
 function setBoardAdding(on) {
-  S.boardAdding = on;
+  S.boardAdding = on; if (on) S.spotAdding = false;
   $('#boardAddHint').hidden = !on;
-  S.map.setOptions({ draggableCursor: on ? 'crosshair' : null });
-  S.map.data.setStyle(s => ({ ...boardsBaseTownStyle(), clickable: !on && S.map.getZoom() >= 14 }));
+  setAddingUI(on);
 }
-function boardsBaseTownStyle() { const z = S.map.getZoom(); return { visible: z >= 14, strokeColor: '#ffffff', strokeOpacity: z >= 16 ? 0.55 : 0.35, strokeWeight: 1, fillOpacity: 0, zIndex: 1 }; }
 function renderBoards() {
   for (const m of S.boardMarkers.values()) m.setMap(null);
   S.boardMarkers.clear();
@@ -922,12 +948,14 @@ function toggleSpotBar(on) {
   S.spotBarOn = on ?? !S.spotBarOn;
   if (S.spotBarOn && S.boardsOn) toggleBoards(false);
   $('#spotBar').hidden = !S.spotBarOn;
+  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; if (S.spotBarOn) setLegend(false);
   if (!S.spotBarOn) setSpotAdding(false);
   renderSpots();
 }
 function setSpotAdding(on) {
-  S.spotAdding = on; $('#spotAddHint').hidden = !on;
-  S.map.setOptions({ draggableCursor: on ? 'crosshair' : null });
+  S.spotAdding = on; if (on) S.boardAdding = false;
+  $('#spotAddHint').hidden = !on;
+  setAddingUI(on);
 }
 function renderSpots() {
   for (const m of S.spotMarkers.values()) m.setMap(null);
@@ -1063,6 +1091,10 @@ function bindUI() {
   $('#btnSpotList').onclick = showSpotList;
   $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; localStorage.removeItem('cm_user'); showLogin(); };
   $('#sheetHandle').onclick = closeSheet;
+  $('#legendBtn').onclick = () => setLegend(!S.legendOpen);
+  // 凡例を左へスワイプで閉じる
+  let lsx = null; $('#legend').addEventListener('touchstart', e => { lsx = e.touches[0].clientX; }, { passive: true });
+  $('#legend').addEventListener('touchend', e => { if (lsx != null && lsx - e.changedTouches[0].clientX > 50) setLegend(false); lsx = null; });
   // 地図タップでメニュー・シートを閉じる
   $('#map').addEventListener('pointerdown', () => { $('#menu').hidden = true; }, { capture: true });
 }

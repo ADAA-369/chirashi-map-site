@@ -44,10 +44,10 @@
       <button id="modeTap" class="seg">点で囲む</button>
     </div>
     <div id="drawButtons">
-      <button id="btnDrawCancel" class="ghost">やめる</button>
-      <button id="btnDrawRedo" class="ghost">描き直す</button>
-      <button id="btnDrawUndo" class="ghost" hidden>1つ戻す</button>
-      <button id="btnDrawDone" class="primary" disabled>これで決定</button>
+      <button id="btnDrawCancel" class="ghost">中止</button>
+      <button id="btnDrawRedo" class="ghost">やり直し</button>
+      <button id="btnDrawUndo" class="ghost" hidden>戻る</button>
+      <button id="btnDrawDone" class="primary" disabled>決定</button>
     </div>
   </div>
 
@@ -60,7 +60,7 @@
       <button id="btnBoardList" class="ghost">一覧</button>
       <button id="btnBoardClose" class="ghost">✕ 閉じる</button>
     </div>
-    <div id="boardAddHint" hidden>ポスターを貼る場所を地図でタップしてください　<button id="btnBoardAddCancel" class="ghost small">やめる</button></div>
+    <div id="boardAddHint" hidden>ポスターを貼る場所を地図でタップしてください（普段は地図を長押しでも追加できます）　<button id="btnBoardAddCancel" class="ghost small">やめる</button></div>
   </div>
 
   <!-- 拠点・辻立ちモードのバー -->
@@ -71,24 +71,28 @@
       <button id="btnSpotList" class="ghost">予定・実績</button>
       <button id="btnSpotClose" class="ghost">✕ 閉じる</button>
     </div>
-    <div id="spotAddHint" hidden>事務所や辻立ちの場所を地図でタップしてください　<button id="btnSpotAddCancel" class="ghost small">やめる</button></div>
+    <div id="spotAddHint" hidden>事務所や辻立ちの場所を地図でタップしてください（普段は地図を長押しでも追加できます）　<button id="btnSpotAddCancel" class="ghost small">やめる</button></div>
   </div>
 
   <!-- 形の調整（つまみ） -->
   <div id="adjustBar" hidden>
     <div id="adjustHint">白い四角を動かすと形を直せます（辺の途中の四角で角を増やせます）</div>
     <div class="adjustButtons">
-      <button id="btnAdjustCancel" class="ghost">やめる</button>
+      <button id="btnAdjustCancel" class="ghost">中止</button>
       <button id="btnAdjustOk" class="primary">この形で次へ</button>
     </div>
   </div>
   </div><!-- /mapWrap -->
 
+  <!-- 大きなズームボタン -->
+  <div id="zoomBtns"><button id="zoomIn" aria-label="拡大">＋</button><button id="zoomOut" aria-label="縮小">−</button></div>
+
   <!-- 記録ボタン -->
   <button id="fab">＋ 配布を記録</button>
 
-  <!-- 凡例 -->
-  <div id="legend"></div>
+  <!-- 凡例（左上のボタンで開閉） -->
+  <button id="legendBtn" title="枚数・凡例">▤</button>
+  <div id="legend" hidden></div>
 
   <!-- サイドメニュー -->
   <nav id="menu" hidden>
