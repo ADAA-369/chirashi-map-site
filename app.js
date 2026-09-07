@@ -571,7 +571,10 @@ function setDrawMode(mode) {
   $('#modeFree').classList.toggle('on', mode === 'free'); $('#modeTap').classList.toggle('on', mode === 'tap');
   $('#btnDrawUndo').hidden = mode !== 'tap'; $('#btnDrawDone').disabled = true;
   // なぞる時だけキャンバスが指を受け取る。点で囲む時は地図をそのまま操作できる
-  $('#drawLayer').classList.toggle('tapMode', mode === 'tap');
+  const L = $('#drawLayer'); L.classList.toggle('tapMode', mode === 'tap');
+  L.style.pointerEvents = mode === 'tap' ? 'none' : ''; L.style.touchAction = mode === 'tap' ? 'auto' : '';
+  $('#drawCanvas').style.display = mode === 'tap' ? 'none' : '';
+  for (const id of ['#drawModes', '#drawButtons']) $(id).style.pointerEvents = 'auto';
   if (mode === 'tap') updateTapUI(); else $('#drawHint').textContent = '配った範囲を指でなぞって囲んでください';
 }
 function drawPreview(closed) {
