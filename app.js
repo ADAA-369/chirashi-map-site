@@ -341,12 +341,25 @@ function renderRecords() {
 
 function renderChips() {
   const el = $('#flyerChips');
-  el.innerHTML = S.settings.flyers.map(f => `<button class="chip ${S.filter.flyers.has(f.id) ? 'on' : ''}" data-id="${f.id}" style="--c:${f.color}"><span class="dot"></span>${esc(f.name)}</button>`).join('');
-  el.querySelectorAll('.chip').forEach(c => c.onclick = () => {
-    const id = c.dataset.id;
-    S._userToggled = true;
-    if (S.filter.flyers.has(id)) S.filter.flyers.delete(id); else S.filter.flyers.add(id);
-    renderAll();
+  el.innerHTML = S.settings.flyers.map(f => `<button class="chip ${S.filter.flyers.has(f.id) ? 'on' : ''}" data-id="${f.id}" style="--c:${f.color}" draggable="true" title="ドラッグで並べ替え"><span class="dot"></span>${esc(f.name)}</button>`).join('');
+  el.querySelectorAll('.chip').forEach(c => {
+    c.onclick = () => {
+      const id = c.dataset.id; S._userToggled = true;
+      if (S.filter.flyers.has(id)) S.filter.flyers.delete(id); else S.filter.flyers.add(id);
+      renderAll();
+    };
+    c.ondragstart = e => { e.dataTransfer.setData('text/plain', c.dataset.id); e.dataTransfer.effectAllowed = 'move'; c.classList.add('dragging'); };
+    c.ondragend = () => c.classList.remove('dragging');
+    c.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; c.classList.add('dragOver'); };
+    c.ondragleave = () => c.classList.remove('dragOver');
+    c.ondrop = async e => {
+      e.preventDefault(); c.classList.remove('dragOver');
+      const from = e.dataTransfer.getData('text/plain'), to = c.dataset.id; if (!from || from === to) return;
+      const arr = S.settings.flyers; const fi = arr.findIndex(f => f.id === from), ti = arr.findIndex(f => f.id === to);
+      if (fi < 0 || ti < 0) return;
+      const [m] = arr.splice(fi, 1); arr.splice(ti, 0, m);
+      await store.saveSettings(S.settings); renderAll(); toast('並び順を保存しました');
+    };
   });
 }
 function renderLegend() {
@@ -372,7 +385,7 @@ function startDrawing() {
   const rect = layer.getBoundingClientRect();
   cv.width = Math.round(rect.width * devicePixelRatio); cv.height = Math.round(rect.height * devicePixelRatio);
   const ctx = cv.getContext('2d'); ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-  S.drawing = { pts: [], ctx, rect, active: false, mode: S.drawMode || 'free', down: null, dragIdx: null, dragMoved: false, dragInserted: false };
+  S.drawing = { pts: [], ctx, rect, active: false, mode: S.drawMode || 'tap', down: null, dragIdx: null, dragMoved: false, dragInserted: false };
   setDrawMode(S.drawing.mode);
   $('#fab').hidden = true;
   const pos = e => [e.clientX - S.drawing.rect.left, e.clientY - S.drawing.rect.top];
@@ -661,8 +674,13 @@ function showSettings() {
     for (const f of flyers) S.filter.flyers.add(f.id);
     closeSheet(); renderAll(); toast('設定を保存しました');
   };
-  function flyerRow(f) { return `<div class="rowItem" data-id="${f.id}"><input type="color" value="${f.color}"><input type="text" value="${esc(f.name)}" placeholder="例：政策ビラ第2号"><button class="icon delFlyer">🗑</button></div>`; }
-  function bindFlyerRows() { $('#flyerRows').querySelectorAll('.delFlyer').forEach(b => b.onclick = () => { if (confirm('このチラシを削除しますか？（記録は残ります）')) b.closest('.rowItem').remove(); }); }
+  function flyerRow(f) { return `<div class="rowItem" data-id="${f.id}"><input type="color" value="${f.color}"><input type="text" value="${esc(f.name)}" placeholder="例：政策ビラ第2号"><span class="orderBtns"><button class="icon upFlyer" title="上へ">▲</button><button class="icon downFlyer" title="下へ">▼</button></span><button class="icon delFlyer">🗑</button></div>`; }
+  function bindFlyerRows() {
+    const rows = $('#flyerRows');
+    rows.querySelectorAll('.delFlyer').forEach(b => b.onclick = () => { if (confirm('このチラシを削除しますか？（記録は残ります）')) b.closest('.rowItem').remove(); });
+    rows.querySelectorAll('.upFlyer').forEach(b => b.onclick = () => { const r = b.closest('.rowItem'); if (r.previousElementSibling) rows.insertBefore(r, r.previousElementSibling); });
+    rows.querySelectorAll('.downFlyer').forEach(b => b.onclick = () => { const r = b.closest('.rowItem'); if (r.nextElementSibling) rows.insertBefore(r.nextElementSibling, r); });
+  }
 }
 
 /* ---------------- UI バインド ---------------- */
