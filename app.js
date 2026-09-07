@@ -1155,6 +1155,7 @@ function renderSpots() {
       const line2 = next ? `次 <b>${fmtDate(next.date)}</b>${next.time ? ' ' + esc(next.time) : ''}${next.member ? ' ' + esc(next.member) : ''}` : (done ? `予定なし ／ 実施${done}回` : '予定なし');
       const lb = new RecLabel({ lat: sp.lat, lng: sp.lng }, `${k.emoji} <b>${esc(sp.name)}</b><br>${line2}`, k.color, { dy: -48, cls: 'recLabel spotLabel' });
       lb.setMap(S.map); S.spotLabels.push(lb);
+      if (next) { const inTen = (new Date(next.date) - new Date(today())) / 86400000; if (inTen >= 0 && inTen <= 7) weatherFor(sp.lat, sp.lng, next.date, next.time).then(w => { if (w && lb.div) lb.div.insertAdjacentHTML('beforeend', `<br><span class="wx">${esc(w.icon)} 降水${w.pop}%</span>`); }); }
     }
   }
 }
@@ -1201,6 +1202,7 @@ function showSpot(sp) {
     <div class="btnRow"><button class="primary" id="spClose">閉じる</button></div>
   `);
   $('#spClose').onclick = closeSheet;
+  decorateWeather(sp);
   $('#spMove').onclick = () => startPinPlace(new google.maps.LatLng(sp.lat, sp.lng), async pos => { const nsp = { ...sp, lat: +pos.lat().toFixed(6), lng: +pos.lng().toFixed(6) }; try { await store.saveSpot(nsp); } catch { return; } S.spots = await store.loadSpots(); renderSpots(); toast('位置を直しました'); showSpot(S.spots.find(x => x.id === sp.id) || nsp); }, `「${sp.name}」のピンをドラッグして「ここに決定」`);
   $('#spPlan').onclick = () => openEventForm(sp, { done: false });
   $('#spDidNow').onclick = () => openEventForm(sp, { done: true, date: today() });
@@ -1235,7 +1237,7 @@ function openEventForm(sp, ev) {
 function showSpotList() {
   const name = id => S.spots.find(s => s.id === id)?.name || '(削除済み)';
   const up = upcoming(S.events), hist = history(S.events);
-  const row = e => `<tr data-spot="${e.spot_id}"><td>${fmtDate(e.date)}</td><td>${esc(e.time)}</td><td>${esc(name(e.spot_id))}</td><td>${esc(e.member || '')}</td><td>${esc(e.memo || '')}</td></tr>`;
+  const row = e => `<tr data-spot="${e.spot_id}" data-ev="${e.id}"><td>${fmtDate(e.date)}</td><td>${esc(e.time)}</td><td>${esc(name(e.spot_id))}</td><td>${esc(e.member || '')}</td><td>${esc(e.memo || '')}</td></tr>`;
   openSheet(`
     <h3>辻立ち・活動の予定と実績</h3>
     <h4 style="margin:10px 0 4px">今後の予定（${up.length}件）</h4>
@@ -1246,6 +1248,7 @@ function showSpotList() {
   `);
   $('#slClose').onclick = closeSheet;
   $('#sheetBody').querySelectorAll('tr[data-spot]').forEach(tr => tr.onclick = () => { const sp = S.spots.find(x => x.id === tr.dataset.spot); if (!sp) return; S.map.panTo({ lat: sp.lat, lng: sp.lng }); showSpot(sp); });
+  (async () => { for (const tr of [...$('#sheetBody').querySelectorAll('tr[data-ev]')]) { const e = S.events.find(x => x.id === tr.dataset.ev); const sp = e && S.spots.find(x => x.id === e.spot_id); if (!sp) continue; const inTen = (new Date(e.date) - new Date(today())) / 86400000; if (inTen < 0 || inTen > 7) continue; const w = await weatherFor(sp.lat, sp.lng, e.date, e.time); if (w) tr.querySelector('td:last-child').insertAdjacentHTML('beforeend', ` <span class="wx">${esc(w.text)}</span>`); } })();
 }
 
 /* ---------------- Googleマップ連携（ストリートビュー・経路） ---------------- */
@@ -1526,6 +1529,82 @@ function openBoardImport() {
       S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast(`${ok}件を取り込みました。ピンの位置がずれていれば「位置を直す」で調整してください`, 4000);
     };
   };
+}
+
+/* ---------------- 天気（Google Weather API・有効時のみ） ---------------- */
+const _wx = { cache: new Map(), denied: false };
+// 指定地点の今後10日分の時間別予報を取得してキャッシュ（1地点1時間）
+async function weatherHours(lat, lng) {
+  if (_wx.denied || !CFG.GOOGLE_MAPS_API_KEY) return null;
+  const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+  const c = _wx.cache.get(key); if (c && Date.now() - c.t < 3600000) return c.hours;
+  try {
+    let hours = [], token = null, guard = 0;
+    do {
+      const u = new URL('https://weather.googleapis.com/v1/forecast/hours:lookup');
+      u.searchParams.set('key', CFG.GOOGLE_MAPS_API_KEY); u.searchParams.set('location.latitude', lat); u.searchParams.set('location.longitude', lng);
+      u.searchParams.set('hours', '240'); u.searchParams.set('pageSize', '240'); u.searchParams.set('languageCode', 'ja'); if (token) u.searchParams.set('pageToken', token);
+      const r = await fetch(u); if (!r.ok) { if (r.status === 403 || r.status === 400) _wx.denied = true; return null; }
+      const j = await r.json(); hours = hours.concat(j.forecastHours || []); token = j.nextPageToken || null;
+    } while (token && ++guard < 3);
+    _wx.cache.set(key, { t: Date.now(), hours }); return hours;
+  } catch { return null; }
+}
+// 気象庁：愛知県（230000）の府県予報＋週間予報（キー不要・CORS可）。西部＝尾張（蟹江・津島・稲沢を含む）
+async function jmaForecast() {
+  if (_wx.jma && Date.now() - _wx.jma.t < 1800000) return _wx.jma.data;
+  try { const d = await fetch('https://www.jma.go.jp/bosai/forecast/data/forecast/230000.json').then(r => r.json()); _wx.jma = { t: Date.now(), data: d }; return d; } catch { return null; }
+}
+const JMA_ICON = code => { const c = String(code || ''); return c.startsWith('1') ? '☀️' : c.startsWith('2') ? '☁️' : c.startsWith('3') ? '☔' : c.startsWith('4') ? '❄️' : '🌤'; };
+async function weatherForJma(date, timeText) {
+  const j = await jmaForecast(); if (!j) return null;
+  const m = String(timeText || '').match(/(\d{1,2})(?::(\d{2}))?/); const startH = m ? +m[1] : 9;
+  const m2 = String(timeText || '').match(/[〜~\-ー](\d{1,2})/); const endH = m2 ? Math.max(startH + 1, +m2[1]) : startH + 1;
+  const day = j[0]; const west = ts => ts.areas.find(a => a.area.name === '西部') || ts.areas[0];
+  // 短期（今日〜明後日）：6時間ごとの降水確率
+  const popTs = day.timeSeries.find(ts => west(ts).pops);
+  if (popTs) {
+    const a = west(popTs); const pops = [];
+    popTs.timeDefines.forEach((t, i) => { const d = new Date(t); const dd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; const h0 = d.getHours(), h1 = h0 + 6; if (dd === date && h0 < endH && h1 > startH && a.pops[i] !== '') pops.push(+a.pops[i]); });
+    if (pops.length) {
+      const wTs = day.timeSeries.find(ts => west(ts).weathers); let desc = '', code = '';
+      if (wTs) { const idx = wTs.timeDefines.findIndex(t => t.slice(0, 10) === date); if (idx >= 0) { desc = (west(wTs).weathers[idx] || '').replace(/\s+/g, '').split(/所により|時々|のち|後|を伴う/)[0].slice(0, 6); code = west(wTs).weatherCodes[idx]; } }
+      const pop = Math.max(...pops); const icon = pop >= 50 ? '☔' : pop >= 30 ? '🌂' : JMA_ICON(code);
+      return { pop, desc, icon, text: `${icon} 降水${pop}%${desc ? ' ' + desc : ''}（気象庁）` };
+    }
+  }
+  // 週間（7日先まで）：日ごとの降水確率
+  const wk = j[1]; if (!wk) return null;
+  const wts = wk.timeSeries[0]; const idx = wts.timeDefines.findIndex(t => t.slice(0, 10) === date);
+  if (idx < 0) return null;
+  const a = wts.areas[0]; const pop = a.pops[idx] === '' ? null : +a.pops[idx]; const code = a.weatherCodes?.[idx];
+  if (pop == null) return null;
+  const icon = pop >= 50 ? '☔' : pop >= 30 ? '🌂' : JMA_ICON(code);
+  return { pop, desc: '', icon, text: `${icon} 降水${pop}%（週間・気象庁）` };
+}
+// 日付＋時間帯（例 "7:00〜8:00"）に対応する予報を1行にまとめる。日本は気象庁を優先、なければGoogle
+async function weatherFor(lat, lng, date, timeText) {
+  const jm = await weatherForJma(date, timeText); if (jm) return jm;
+  const hours = await weatherHours(lat, lng); if (!hours || !hours.length) return null;
+  const m = String(timeText || '').match(/(\d{1,2})(?::(\d{2}))?/); const startH = m ? +m[1] : 9;
+  const m2 = String(timeText || '').match(/[〜~\-ー](\d{1,2})/); const endH = m2 ? Math.max(startH + 1, +m2[1]) : startH + 1;
+  const pick = hours.filter(h => { const t = new Date(h.interval.startTime); const d = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; return d === date && t.getHours() >= startH && t.getHours() < endH; });
+  if (!pick.length) return null;
+  const pop = Math.max(...pick.map(h => h.precipitation?.probability?.percent ?? 0));
+  const temp = Math.round(pick[0].temperature?.degrees ?? NaN);
+  const desc = pick[0].weatherCondition?.description?.text || '';
+  const icon = pop >= 50 ? '☔' : pop >= 30 ? '🌂' : /晴/.test(desc) ? '☀️' : /曇/.test(desc) ? '☁️' : '🌤';
+  return { pop, temp, desc, icon, text: `${icon} 降水${pop}%${isFinite(temp) ? ` ${temp}℃` : ''}${desc ? ' ' + desc : ''}` };
+}
+// 予定行に天気を後から差し込む
+async function decorateWeather(sp) {
+  const rows = [...document.querySelectorAll('.evRow[data-id]')];
+  for (const row of rows) {
+    const e = S.events.find(x => x.id === row.dataset.id); if (!e || e.done) continue;
+    const inTen = (new Date(e.date) - new Date(today())) / 86400000; if (inTen < 0 || inTen > 7) continue;
+    const w = await weatherFor(sp.lat, sp.lng, e.date, e.time); if (!w) continue;
+    const tag = document.createElement('span'); tag.className = 'wx'; tag.textContent = w.text; row.querySelector('.d')?.after(tag);
+  }
 }
 
 /* ---------------- UI バインド ---------------- */

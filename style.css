@@ -65,6 +65,7 @@ h1,h2,h3{margin:0 0 8px}
 .evRow{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:14px}
 .evRow .d{font-weight:700;min-width:5.5em}
 .evRow .m{color:var(--muted);flex:1}
+.wx{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:#0b3a48;color:#9be7f5;font-size:12px;white-space:nowrap}
 .evRow button{padding:4px 8px;border-radius:8px;font-size:12px}
 #assignBar{position:absolute;left:0;right:0;top:0;z-index:7;padding:8px 10px;background:linear-gradient(rgba(15,23,32,.92),rgba(15,23,32,.75) 70%,transparent)}
 #assignStat{font-size:13px;font-weight:700;margin-right:auto;background:rgba(15,23,32,.9);padding:6px 10px;border-radius:999px}
