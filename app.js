@@ -65,14 +65,14 @@ const SupabaseStore = {
     const { data, error } = await this.client.from('settings').select('id').eq('id', 'main');
     return !error && Array.isArray(data) && data.length === 1;
   },
-  rowToRec(r) { return { id: r.id, member: r.member, date: r.date, flyer_id: r.flyer_id, count: r.count, memo: r.memo || '', polygon: r.polygon, est_setai: r.est_setai, town: r.town, area_m2: r.area_m2, created_at: r.created_at, updated_at: r.updated_at }; },
+  rowToRec(r) { return { id: r.id, group_id: r.group_id || null, member: r.member, date: r.date, flyer_id: r.flyer_id, count: r.count, memo: r.memo || '', polygon: r.polygon, est_setai: r.est_setai, town: r.town, area_m2: r.area_m2, created_at: r.created_at, updated_at: r.updated_at }; },
   async loadRecords() {
     const { data, error } = await this.client.from('records').select('*').eq('deleted', false).order('date', { ascending: false });
     if (error) { console.error(error); toast('読み込みに失敗しました（通信）'); return S.records || []; }
     return data.map(r => this.rowToRec(r));
   },
   async saveRecord(r) {
-    const row = { id: r.id, member: r.member, date: r.date, flyer_id: r.flyer_id, count: r.count, memo: r.memo || '', polygon: r.polygon, est_setai: r.est_setai, town: r.town, area_m2: r.area_m2, updated_at: new Date().toISOString() };
+    const row = { id: r.id, group_id: r.group_id || null, member: r.member, date: r.date, flyer_id: r.flyer_id, count: r.count, memo: r.memo || '', polygon: r.polygon, est_setai: r.est_setai, town: r.town, area_m2: r.area_m2, updated_at: new Date().toISOString() };
     const { error } = await this.client.from('records').upsert(row);
     if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; }
   },
@@ -401,18 +401,22 @@ function renderRecords() {
   for (const p of S.overlapPolys) p.setMap(null);
   S.overlapPolys = [];
   const recs = filteredRecords();
-  for (const r of recs) {
-    const f = flyerOf(r.flyer_id);
+  // 同じ範囲（group_id）にまとめる
+  const groups = new Map();
+  for (const r of recs) { const k = r.group_id || r.id; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
+  for (const [k, list] of groups) {
+    const r = list[0]; const f = flyerOf(r.flyer_id); const f2 = list.length > 1 ? flyerOf(list[1].flyer_id) : null;
     const poly = new google.maps.Polygon({
       paths: r.polygon.map(([lng, lat]) => ({ lat, lng })),
-      strokeColor: f.color, strokeOpacity: 0.95, strokeWeight: 2,
+      strokeColor: f2 ? f2.color : f.color, strokeOpacity: 0.95, strokeWeight: f2 ? 4 : 2,
       fillColor: f.color, fillOpacity: 0.32, map: S.map, zIndex: 2,
     });
     poly.addListener('click', ev => { if (!S.drawing) showRecord(r, ev.latLng); });
-    S.polys.set(r.id, poly);
+    S.polys.set(k, poly);
     if (showLabels) {
       const c = turf.centerOfMass(recPolygon(r)).geometry.coordinates;
-      const html = `<b>${fmtDate(r.date)}</b> ${esc(r.member)}<br>${esc(f.name)} <b>${r.count.toLocaleString()}</b>枚`;
+      const lines = list.map(x => `<span style="color:${flyerOf(x.flyer_id).color}">●</span>${esc(flyerOf(x.flyer_id).name)} <b>${x.count.toLocaleString()}</b>枚`).join('<br>');
+      const html = `<b>${fmtDate(r.date)}</b> ${esc(r.member)}<br>${lines}`;
       const lb = new RecLabel({ lat: c[1], lng: c[0] }, html, f.color); lb.setMap(S.map); S.labels.push(lb);
     }
   }
@@ -421,6 +425,7 @@ function renderRecords() {
   for (const r of recs) (byFlyer[r.flyer_id] ||= []).push(r);
   for (const list of Object.values(byFlyer)) {
     for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      if (list[i].group_id && list[i].group_id === list[j].group_id) continue;
       const a = recPolygon(list[i]), b = recPolygon(list[j]);
       if (!turf.booleanIntersects(a, b)) continue;
       let inter; try { inter = turf.intersect(turf.featureCollection([a, b])); } catch { continue; }
@@ -640,13 +645,24 @@ function endAdjust(ok) {
   a.poly.setMap(null); S.adjust = null;
   $('#adjustBar').hidden = true; $('#fab').hidden = false; $('#legendBtn').hidden = S.boardsOn || S.spotBarOn;
   for (const p of S.polys.values()) p.setOptions({ clickable: true });
-  if (ok) openRecordForm(a.rec ? { ...a.rec, polygon: ring } : { polygon: ring });
+  if (!ok) return;
+  if (a.rec) {
+    // 既存記録の形の変更：同じ範囲の記録すべてに反映してから内容編集へ
+    const list = groupOf(a.rec).length ? groupOf(a.rec) : [a.rec];
+    (async () => {
+      const est = estimateRecord(turf.polygon([ring])); const area = Math.round(turf.area(turf.polygon([ring])));
+      try { for (const x of list) await store.saveRecord({ ...x, polygon: ring, est_setai: est.setai, town: est.town, area_m2: area, updated_at: new Date().toISOString() }); } catch { return; }
+      S.records = await store.loadRecords(); renderAll(); toast('形を保存しました');
+      showRecord(S.records.find(x => x.id === a.rec.id) || { ...a.rec, polygon: ring });
+    })();
+  } else openRecordForm({ polygon: ring });
 }
 
 /* ---------------- ボトムシート ---------------- */
 function openSheet(html) { $('#sheetBody').innerHTML = html; $('#sheet').hidden = false; }
 function closeSheet() { $('#sheet').hidden = true; }
 
+function groupOf(rec) { return rec.group_id ? S.records.filter(x => x.group_id === rec.group_id) : (rec.id ? [S.records.find(x => x.id === rec.id) || rec] : []); }
 function openRecordForm(rec) {
   const isNew = !rec.id;
   const poly = turf.polygon([rec.polygon]);
@@ -654,41 +670,59 @@ function openRecordForm(rec) {
   const area = Math.round(turf.area(poly));
   const flyers = S.settings.flyers;
   if (!flyers.length) { toast('先に設定でチラシを登録してください'); return; }
+  const existing = isNew ? [] : groupOf(rec);
+  const rows = existing.length ? existing.map(x => ({ id: x.id, flyer_id: x.flyer_id, count: x.count })) : [{ id: null, flyer_id: rec.flyer_id || flyers[0].id, count: rec.count ?? est.setai }];
+  const base = existing[0] || rec;
+  const flyerRow = (row, i) => `<div class="rowItem flyerLine" data-id="${row.id || ''}"><select class="fFlyer">${flyers.map(f => `<option value="${f.id}" ${row.flyer_id === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select><input class="fCount" type="number" inputmode="numeric" min="0" value="${row.count}" placeholder="枚数"><button class="icon delLine" title="このチラシを外す">🗑</button></div>`;
   openSheet(`
     <h3>${isNew ? '配布を記録' : '記録を編集'}</h3>
     <div class="small">範囲 約${area.toLocaleString()}㎡ ／ 推定 <b>${est.setai}</b> 世帯 ／ ${esc(est.town)}</div>
-    <label>チラシ<select id="fFlyer">${flyers.map(f => `<option value="${f.id}" ${rec.flyer_id === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>
-    <label>配った部数（枚）<input id="fCount" type="number" inputmode="numeric" min="0" value="${rec.count ?? est.setai}"></label>
-    <label>配った日<input id="fDate" type="date" value="${rec.date || today()}"></label>
-    <label>配った人<select id="fMember">${S.settings.members.map(m => `<option ${((rec.member || S.user) === m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
-    <label>メモ（任意）<input id="fMemo" type="text" value="${esc(rec.memo || '')}" placeholder="例：東側のアパートは投函不可"></label>
+    <label>配ったチラシと枚数（複数可）</label>
+    <div id="flyerLines">${rows.map(flyerRow).join('')}</div>
+    <button class="ghost" id="addLine" style="padding:8px 12px;border-radius:8px;margin-top:4px">＋ チラシを追加</button>
+    <label>配った日<input id="fDate" type="date" value="${base.date || today()}"></label>
+    <label>配った人<select id="fMember">${S.settings.members.map(m => `<option ${((base.member || S.user) === m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
+    <label>メモ（任意）<input id="fMemo" type="text" value="${esc(base.memo || '')}" placeholder="例：東側のアパートは投函不可"></label>
     <div class="btnRow"><button class="ghost" id="fCancel">やめる</button><button class="primary" id="fSave">保存する</button></div>
   `);
+  const bindLines = () => $('#flyerLines').querySelectorAll('.delLine').forEach(b => b.onclick = () => { if ($('#flyerLines').children.length > 1) b.closest('.flyerLine').remove(); else toast('最低1つは必要です'); });
+  bindLines();
+  $('#addLine').onclick = () => {
+    const used = [...$('#flyerLines').querySelectorAll('.fFlyer')].map(x => x.value);
+    const next = flyers.find(f => !used.includes(f.id)) || flyers[0];
+    $('#flyerLines').insertAdjacentHTML('beforeend', flyerRow({ id: null, flyer_id: next.id, count: est.setai }, 0)); bindLines();
+  };
   $('#fCancel').onclick = closeSheet;
   $('#fSave').onclick = async () => {
-    const r = {
-      id: rec.id || uid(), polygon: rec.polygon,
-      flyer_id: $('#fFlyer').value, count: Number($('#fCount').value || 0), date: $('#fDate').value || today(),
-      member: $('#fMember').value, memo: $('#fMemo').value.trim(),
-      est_setai: est.setai, town: est.town, area_m2: area,
-      created_at: rec.created_at || new Date().toISOString(), updated_at: new Date().toISOString(),
-    };
+    const lines = [...$('#flyerLines').querySelectorAll('.flyerLine')].map(el => ({ id: el.dataset.id || null, flyer_id: el.querySelector('.fFlyer').value, count: Number(el.querySelector('.fCount').value || 0) }));
+    const seen = new Set(); for (const l of lines) { if (seen.has(l.flyer_id)) { toast('同じチラシが2行あります。1行にまとめてください'); return; } seen.add(l.flyer_id); }
+    const group_id = existing[0]?.group_id || (lines.length > 1 ? uid() : null);
+    const common = { polygon: rec.polygon, date: $('#fDate').value || today(), member: $('#fMember').value, memo: $('#fMemo').value.trim(), est_setai: est.setai, town: est.town, area_m2: area, group_id: group_id || (lines.length > 1 ? uid() : null) };
     $('#fSave').disabled = true;
-    try { await store.saveRecord(r); } catch { $('#fSave').disabled = false; return; }
+    try {
+      for (const l of lines) {
+        const prev = existing.find(x => x.id === l.id);
+        await store.saveRecord({ id: l.id || uid(), ...common, flyer_id: l.flyer_id, count: l.count, created_at: prev?.created_at || new Date().toISOString(), updated_at: new Date().toISOString() });
+      }
+      for (const x of existing) if (!lines.some(l => l.id === x.id)) await store.deleteRecord(x.id);
+    } catch { $('#fSave').disabled = false; return; }
     S.records = await store.loadRecords();
-    if (!S.filter.flyers.has(r.flyer_id)) S.filter.flyers.add(r.flyer_id);
+    for (const l of lines) if (!S.filter.flyers.has(l.flyer_id)) S.filter.flyers.add(l.flyer_id);
     closeSheet(); renderAll(); toast('保存しました');
   };
 }
 
 function showRecord(r, latLng) {
+  const list = groupOf(r).length ? groupOf(r) : [r];
   const f = flyerOf(r.flyer_id);
+  const total = list.reduce((a, x) => a + (x.count || 0), 0);
   openSheet(`
-    <h3><span style="display:inline-block;width:12px;height:12px;background:${f.color};border-radius:3px;margin-right:6px"></span>${esc(f.name)}</h3>
+    <h3>${list.map(x => `<span style="display:inline-block;width:12px;height:12px;background:${flyerOf(x.flyer_id).color};border-radius:3px;margin-right:4px"></span>`).join('')}${list.length > 1 ? `${list.length}種類のチラシ` : esc(f.name)}</h3>
     <dl class="kv">
+      ${list.map(x => `<dt>${esc(flyerOf(x.flyer_id).name)}</dt><dd>${x.count.toLocaleString()} 枚</dd>`).join('')}
+      ${list.length > 1 ? `<dt>合計</dt><dd>${total.toLocaleString()} 枚</dd>` : ''}
       <dt>日付</dt><dd>${esc(r.date)}</dd>
       <dt>配った人</dt><dd>${esc(r.member)}</dd>
-      <dt>部数</dt><dd>${r.count.toLocaleString()} 枚</dd>
       <dt>推定世帯</dt><dd>${(r.est_setai ?? 0).toLocaleString()} 世帯（${esc(r.town || '')}）</dd>
       <dt>面積</dt><dd>約 ${(r.area_m2 ?? 0).toLocaleString()} ㎡</dd>
       ${r.memo ? `<dt>メモ</dt><dd>${esc(r.memo)}</dd>` : ''}
@@ -699,8 +733,8 @@ function showRecord(r, latLng) {
   $('#rEdit').onclick = () => openRecordForm(r);
   $('#rShape').onclick = () => { if ($('#fab').disabled) { toast('告示日を過ぎているため変更できません'); return; } startAdjust(r.polygon, r); };
   $('#rDel').onclick = async () => {
-    if (!confirm(`${r.date} ${r.member} ${f.name} ${r.count}枚 の記録を削除しますか？`)) return;
-    try { await store.deleteRecord(r.id); } catch { return; }
+    if (!confirm(`${r.date} ${r.member} の記録（${list.length}件）を削除しますか？`)) return;
+    try { for (const x of list) await store.deleteRecord(x.id); } catch { return; }
     S.records = await store.loadRecords(); closeSheet(); renderAll(); toast('削除しました');
   };
 }
