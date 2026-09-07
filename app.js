@@ -323,7 +323,7 @@ async function loadTowns() {
     for (const f of r.value.features) {
       const p = f.properties;
       if (p.HCODE === 8154) continue; // 水面
-      const town = { feature: f, id: p.KEY_CODE, name: p.S_NAME, city: p.CITY_NAME, setai: p.SETAI, jinko: p.JINKO, area: turf.area(f), kigo: p.KIGO_E };
+      const town = { feature: f, id: p.KEY_CODE, name: p.S_NAME, city: p.CITY_NAME, setai: p.SETAI, jinko: p.JINKO, area: turf.area(f), kigo: p.KIGO_E, bbox: turf.bbox(f) };
       S.towns.push(town);
       f.id = `${p.KEY_CODE}_${p.KIGO_E || 'main'}`;
       const [df] = S.map.data.addGeoJson(f);
@@ -364,7 +364,7 @@ function showTownInfo(town, latLng) {
 // 町丁目に対する配布率（面積ベース）
 function coverageOf(town, recs) {
   if (!recs.length) return 0;
-  const polys = recs.map(r => recPolygon(r)).filter(p => turf.booleanIntersects(p, town.feature));
+  const polys = recs.map(r => recPolygon(r)).filter(p => bboxHit(p.bbox, town.bbox) && turf.booleanIntersects(p, town.feature));
   if (!polys.length) return 0;
   let u = polys[0];
   if (polys.length > 1) { try { u = turf.union(turf.featureCollection(polys)) || u; } catch { } }
@@ -376,8 +376,9 @@ function coverageOf(town, recs) {
 // 記録1件の推定世帯数と主な町丁目
 function estimateRecord(poly) {
   let setai = 0, best = null, bestA = 0;
+  const pb = turf.bbox(poly);
   for (const t of S.towns) {
-    if (!turf.booleanIntersects(poly, t.feature)) continue;
+    if (!bboxHit(pb, t.bbox) || !turf.booleanIntersects(poly, t.feature)) continue;
     let inter; try { inter = turf.intersect(turf.featureCollection([poly, t.feature])); } catch { continue; }
     if (!inter) continue;
     const a = turf.area(inter);
@@ -420,7 +421,14 @@ function overlapRatio(ring, flyerId, excludeIds = []) {
 const isLocked = () => !!S.settings?.noticeDate && today() >= S.settings.noticeDate;
 
 /* ---------------- 記録の描画 ---------------- */
-const recPolygon = r => turf.polygon([r.polygon]);
+const _polyCache = new Map();
+function recPolygon(r) {
+  const k = r.id + '|' + (r.updated_at || '') + '|' + (r.polygon?.length || 0);
+  let p = _polyCache.get(k);
+  if (!p) { p = turf.polygon([r.polygon]); p.bbox = turf.bbox(p); if (_polyCache.size > 3000) _polyCache.clear(); _polyCache.set(k, p); }
+  return p;
+}
+const bboxHit = (a, b) => !(a[0] > b[2] || a[2] < b[0] || a[1] > b[3] || a[3] < b[1]);
 
 function filteredRecords() {
   const p = S.filter.period;
@@ -797,7 +805,7 @@ function showRecord(r, latLng) {
 }
 
 function showList() {
-  const recs = [...filteredRecords()].sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at));
+  const recs = [...filteredRecords()].sort((a, b) => b.date.localeCompare(a.date) || String(b.created_at || '').localeCompare(String(a.created_at || '')));
   const total = recs.reduce((s, r) => s + r.count, 0);
   const byF = {}; for (const r of recs) byF[r.flyer_id] = (byF[r.flyer_id] || 0) + r.count;
   openSheet(`
@@ -1014,6 +1022,7 @@ async function showBoard(b) {
   $('#bPhoto').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
     newBlob = await shrinkImage(f, 1280, 0.8);
+    if (!newBlob) { e.target.value = ''; return; }
     $('#bPhotoBox').innerHTML = `<img src="${URL.createObjectURL(newBlob)}" alt="プレビュー"><div class="small">約${Math.round(newBlob.size / 1024)}KB（保存で確定）</div>`;
     if (status === 'todo') { status = 'done'; $('#sheetBody').querySelectorAll('.stTabs button').forEach(x => x.classList.toggle('on', x.dataset.st === 'done')); }
   };
@@ -1024,7 +1033,7 @@ async function showBoard(b) {
     $('#bSave').disabled = true;
     const nb = { ...b, status, posted_by: $('#bBy').value, posted_at: $('#bDate').value || today(), memo: $('#bMemo').value.trim(), no: $('#bNo').value.trim(), place: $('#bPlace').value.trim(), kind: $('#bKind').value };
     if (status === 'todo') { nb.posted_by = null; nb.posted_at = null; }
-    if (newBlob) { const path = await store.uploadPhoto(newBlob, b.id); if (path) nb.photo_path = path; }
+    if (newBlob) { const path = await store.uploadPhoto(newBlob, b.id); if (!path) { $('#bSave').disabled = false; return; } nb.photo_path = path; }
     try { await store.saveBoard(nb); } catch { $('#bSave').disabled = false; return; }
     S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast('保存しました');
   };
@@ -1038,7 +1047,7 @@ function shrinkImage(file, maxSide, quality) {
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       c.toBlob(b => { URL.revokeObjectURL(url); resolve(b || file); }, 'image/jpeg', quality);
     };
-    img.onerror = () => resolve(file);
+    img.onerror = async () => { try { const bm = await createImageBitmap(file); const r = Math.min(1, maxSide / Math.max(bm.width, bm.height)); const c = document.createElement('canvas'); c.width = Math.round(bm.width * r); c.height = Math.round(bm.height * r); c.getContext('2d').drawImage(bm, 0, 0, c.width, c.height); c.toBlob(b => resolve(b || file), 'image/jpeg', quality); } catch { toast('この写真形式は使えません。カメラで撮り直すか、別の写真を選んでください', 4000); resolve(null); } };
     img.src = url;
   });
 }
