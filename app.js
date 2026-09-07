@@ -279,7 +279,7 @@ async function initMap() {
   S.map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(loc);
   $('#zoomIn').onclick = () => S.map.setZoom(S.map.getZoom() + 1);
   $('#zoomOut').onclick = () => S.map.setZoom(S.map.getZoom() - 1);
-  $('#svBtn').onclick = () => { const c = S.map.getCenter(); window.open(svUrl(c.lat(), c.lng()), '_blank', 'noopener'); };
+
   S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); });
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
@@ -497,7 +497,7 @@ function startDrawing() {
   S.drawing = { pts: [], ll: [], ctx, rect, active: false, mode: S.drawMode || 'tap', down: null, vMarkers: [], mMarkers: [], line: null, poly: null, closeLine: null };
   setAddingUI(true);   // 町丁目・ポリゴン・ピンがタップを横取りしないように
   setDrawMode(S.drawing.mode);
-  $('#fab').hidden = true; setLegend(false); $('#legendBtn').hidden = true; $('#zoomBtns').hidden = true; $('#svBtn').hidden = true; $('#centerMark').hidden = true;
+  $('#fab').hidden = true; setLegend(false); $('#legendBtn').hidden = true; $('#zoomBtns').hidden = true;
   const pos = e => [e.clientX - S.drawing.rect.left, e.clientY - S.drawing.rect.top];
   // なぞるモード（キャンバス）
   layer.onpointerdown = e => {
@@ -602,7 +602,7 @@ function finishStroke() {
 function cancelDrawing() {
   clearTapShapes(); if (S.drawing?.mapClick) google.maps.event.removeListener(S.drawing.mapClick);
   $('#drawLayer').hidden = true; $('#fab').hidden = false; S.drawing = null; setAddingUI(false);
-  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; $('#zoomBtns').hidden = false; $('#svBtn').hidden = false; $('#centerMark').hidden = false;
+  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; $('#zoomBtns').hidden = false;
 }
 function commitDrawing() {
   const d = S.drawing; if (!d) return;
@@ -1097,7 +1097,7 @@ function showSpotList() {
 /* ---------------- Googleマップ連携（ストリートビュー・経路） ---------------- */
 const svUrl = (lat, lng) => `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
 const gmUrl = (lat, lng) => `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
-const extLinks = (lat, lng) => `<div class="btnRow"><a class="ghost linkBtn" target="_blank" rel="noopener" href="${svUrl(lat, lng)}">🧍 ストリートビュー</a><a class="ghost linkBtn" target="_blank" rel="noopener" href="${gmUrl(lat, lng)}">🗺 Googleマップで開く</a></div>`;
+const extLinks = (lat, lng) => `<div class="btnRow"><a class="ghost linkBtn" target="_blank" rel="noopener" href="${gmUrl(lat, lng)}">🗺 Googleマップで開く（経路・写真）</a></div>`;
 
 /* ---------------- 場所の検索（町名＝ローカル／施設・住所＝国土地理院＋Google） ---------------- */
 function openSearch() { $('#searchBox').hidden = false; $('#searchResults').innerHTML = ''; setTimeout(() => $('#searchInp').focus(), 50); }
