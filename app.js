@@ -279,15 +279,7 @@ async function initMap() {
   S.map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(loc);
   $('#zoomIn').onclick = () => S.map.setZoom(S.map.getZoom() + 1);
   $('#zoomOut').onclick = () => S.map.setZoom(S.map.getZoom() - 1);
-  // 長押しで拠点／掲示場を追加（バーを開いている時）
-  const mapEl = $('#map'); let lp = null;
-  mapEl.addEventListener('pointerdown', e => {
-    if (!(S.spotBarOn || S.boardsOn) || S.drawing || S.adjust) return;
-    const sx = e.clientX, sy = e.clientY;
-    lp = { timer: setTimeout(() => { lp = null; const r = mapEl.getBoundingClientRect(); const ll = S.proj.getProjection().fromContainerPixelToLatLng(new google.maps.Point(sx - r.left, sy - r.top)); if (navigator.vibrate) navigator.vibrate(30); if (S.spotBarOn) addSpotAt(ll); else addBoardAt(ll); }, 650), sx, sy };
-  }, { capture: true });
-  const cancelLp = e => { if (lp && (e.type !== 'pointermove' || Math.hypot(e.clientX - lp.sx, e.clientY - lp.sy) > 10)) { clearTimeout(lp.timer); lp = null; } };
-  mapEl.addEventListener('pointermove', cancelLp, { capture: true }); mapEl.addEventListener('pointerup', cancelLp, { capture: true }); mapEl.addEventListener('pointercancel', cancelLp, { capture: true });
+  $('#svBtn').onclick = () => { const c = S.map.getCenter(); window.open(svUrl(c.lat(), c.lng()), '_blank', 'noopener'); };
   S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); });
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
@@ -1119,6 +1111,8 @@ function goTo(it) {
     icon: { path: 'M 0,0 C -2,-6 -12,-8 -12,-17 A 12,12 0 1,1 12,-17 C 12,-8 2,-6 0,0 Z', fillColor: '#ffd60a', fillOpacity: 1, strokeColor: '#333', strokeWeight: 2, scale: 1.3, labelOrigin: new google.maps.Point(0, -17) }, label: { text: '★', fontSize: '14px' } });
   S.searchMarker.addListener('click', () => showSearchSheet(it));
   showSearchSheet(it);
+  // 地図の中心に来るまで待ってから位置合わせ（シートで隠れないよう少し上に）
+  setTimeout(() => S.map.panBy(0, Math.round($('#map').clientHeight * 0.18)), 300);
 }
 function showSearchSheet(it) {
   openSheet(`
@@ -1126,10 +1120,10 @@ function showSearchSheet(it) {
     <div class="small">${esc(it.sub || '')}</div>
     ${extLinks(it.lat, it.lng)}
     <div class="btnRow"><button class="ghost" id="ssSpot">🎤 ここを拠点に追加</button><button class="ghost" id="ssBoard">📌 ここにポスター場所を追加</button></div>
-    <div class="btnRow"><button class="ghost" id="ssClear">★を消す</button><button class="primary" id="ssClose">閉じる</button></div>
+    <div class="btnRow"><button class="primary" id="ssClose">閉じる（★も消える）</button></div>
   `);
-  $('#ssClose').onclick = closeSheet;
-  $('#ssClear').onclick = () => { if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } closeSheet(); };
+  const clearStar = () => { if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } closeSheet(); };
+  $('#ssClose').onclick = clearStar;
   $('#ssSpot').onclick = () => { toggleSpotBar(true); addSpotAt(new google.maps.LatLng(it.lat, it.lng)); setTimeout(() => { const n = $('#spName'); if (n && !n.value) n.value = it.name; }, 50); };
   $('#ssBoard').onclick = () => { toggleBoards(true); addBoardAt(new google.maps.LatLng(it.lat, it.lng)); setTimeout(() => { const n = $('#bPlace'); if (n && !n.value) n.value = it.name; }, 50); };
 }
