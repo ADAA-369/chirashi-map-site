@@ -372,56 +372,98 @@ function startDrawing() {
   const rect = layer.getBoundingClientRect();
   cv.width = Math.round(rect.width * devicePixelRatio); cv.height = Math.round(rect.height * devicePixelRatio);
   const ctx = cv.getContext('2d'); ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-  S.drawing = { pts: [], ctx, rect, active: false, mode: S.drawMode || 'free', down: null };
+  S.drawing = { pts: [], ctx, rect, active: false, mode: S.drawMode || 'free', down: null, dragIdx: null, dragMoved: false, dragInserted: false };
   setDrawMode(S.drawing.mode);
   $('#fab').hidden = true;
+  const pos = e => [e.clientX - S.drawing.rect.left, e.clientY - S.drawing.rect.top];
+  const near = (pts, x, y, r) => { let best = -1, bd = r; pts.forEach(([px, py], i) => { const d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; } }); return best; };
   layer.onpointerdown = e => {
     if (e.target !== cv) return;              // ボタン上の操作は無視
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault(); layer.setPointerCapture?.(e.pointerId);
-    const d = S.drawing; d.down = [e.clientX, e.clientY];
-    if (d.mode === 'free') { d.active = true; d.pts = []; addPt(e); }
+    const d = S.drawing; const [x, y] = pos(e); d.down = [x, y];
+    if (d.mode === 'free') { d.active = true; d.pts = []; addPt(e); return; }
+    // 点で囲む：既存の点をつかむ／辺の中点をつかんで点を追加／空いている所なら後で点を追加
+    const hitR = e.pointerType === 'touch' ? 26 : 16;
+    const vi = near(d.pts, x, y, hitR);
+    if (vi >= 0) { d.dragIdx = vi; d.dragMoved = false; d.dragInserted = false; return; }
+    if (d.pts.length >= 2) {
+      const mids = midpoints(d.pts);
+      const mi = near(mids, x, y, hitR - 4);
+      if (mi >= 0) { d.pts.splice(mi + 1, 0, [x, y]); d.dragIdx = mi + 1; d.dragMoved = false; d.dragInserted = true; drawPreview(d.pts.length >= 3); return; }
+    }
   };
-  layer.onpointermove = e => { const d = S.drawing; if (d?.mode === 'free' && d.active) { e.preventDefault(); addPt(e); } };
+  layer.onpointermove = e => {
+    const d = S.drawing; if (!d) return;
+    if (d.mode === 'free') { if (d.active) { e.preventDefault(); addPt(e); } return; }
+    if (d.dragIdx != null) { e.preventDefault(); const [x, y] = pos(e); d.pts[d.dragIdx] = [x, y]; d.dragMoved = true; drawPreview(d.pts.length >= 3); }
+  };
   layer.onpointerup = layer.onpointercancel = e => {
     const d = S.drawing; if (!d) return;
-    if (e.target !== cv && !d.active && !d.down) return;
-    if (d.mode === 'free') { if (!d.active) return; d.active = false; finishStroke(); return; }
-    // 点で囲む：動かさずに離した時だけ点を追加
-    if (d.down && Math.hypot(e.clientX - d.down[0], e.clientY - d.down[1]) < 8) {
-      d.pts.push([e.clientX - d.rect.left, e.clientY - d.rect.top]); drawPreview(d.pts.length >= 3);
-      $('#btnDrawDone').disabled = d.pts.length < 3;
-      $('#drawHint').textContent = d.pts.length < 3 ? `角を順にタップ（あと${3 - d.pts.length}点以上）` : '角をタップして追加。よければ「これで決定」';
+    if (e.target !== cv && !d.active && !d.down && d.dragIdx == null) return;
+    if (d.mode === 'free') { if (!d.active) return; d.active = false; d.down = null; finishStroke(); return; }
+    const [x, y] = pos(e);
+    if (d.dragIdx != null) {
+      // 動かさずに離した既存の点＝削除
+      if (!d.dragMoved && !d.dragInserted) d.pts.splice(d.dragIdx, 1);
+      d.dragIdx = null; d.down = null; updateTapUI(); return;
     }
-    d.down = null;
+    if (d.down && Math.hypot(x - d.down[0], y - d.down[1]) < 8) d.pts.push([x, y]);
+    d.down = null; updateTapUI();
   };
   function addPt(e) {
-    const x = e.clientX - S.drawing.rect.left, y = e.clientY - S.drawing.rect.top;
+    const [x, y] = pos(e);
     const pts = S.drawing.pts;
     if (pts.length) { const [px, py] = pts[pts.length - 1]; if (Math.hypot(x - px, y - py) < 3) return; }
     pts.push([x, y]); drawPreview(false);
   }
 }
+function midpoints(pts) {
+  const n = pts.length, out = [];
+  for (let i = 0; i < n; i++) { if (n < 3 && i === n - 1) break; const a = pts[i], b = pts[(i + 1) % n]; out.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]); }
+  return out;
+}
+function updateTapUI() {
+  const d = S.drawing; const n = d.pts.length;
+  drawPreview(n >= 3);
+  $('#btnDrawDone').disabled = n < 3;
+  $('#btnDrawUndo').disabled = n === 0;
+  $('#drawHint').textContent = n === 0 ? '範囲の角を順番にタップ（ぐるっと一周する順で）'
+    : n < 3 ? `角を順番にタップ（あと${3 - n}点）。点はドラッグで移動`
+    : '点＝ドラッグで移動・タップで削除／辺の小さな丸＝点を追加。よければ「これで決定」';
+}
 function setDrawMode(mode) {
   const d = S.drawing; S.drawMode = mode; if (!d) return;
-  d.mode = mode; d.pts = []; d.active = false; drawPreview(false);
+  d.mode = mode; d.pts = []; d.active = false; d.dragIdx = null; d.down = null; drawPreview(false);
   $('#modeFree').classList.toggle('on', mode === 'free'); $('#modeTap').classList.toggle('on', mode === 'tap');
   $('#btnDrawUndo').hidden = mode !== 'tap'; $('#btnDrawDone').disabled = true;
-  $('#drawHint').textContent = mode === 'free' ? '配った範囲を指でなぞって囲んでください' : '範囲の角を順にタップしてください';
+  if (mode === 'tap') updateTapUI(); else $('#drawHint').textContent = '配った範囲を指でなぞって囲んでください';
 }
 function drawPreview(closed) {
   const { ctx, rect, pts, mode } = S.drawing;
   ctx.clearRect(0, 0, rect.width, rect.height);
   if (!pts.length) return;
-  ctx.lineWidth = 4; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.strokeStyle = '#00e5ff'; ctx.fillStyle = 'rgba(0,229,255,.25)';
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   if (pts.length >= 2) {
+    // 実線：たどった順の辺
     ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
     for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
-    if (closed) { ctx.closePath(); ctx.fill(); }
-    ctx.stroke();
+    ctx.lineWidth = 4; ctx.strokeStyle = '#00e5ff'; ctx.stroke();
+    if (closed) {
+      // 塗り＋最後→最初は点線（閉じる辺）
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y); ctx.closePath();
+      ctx.fillStyle = 'rgba(0,229,255,.22)'; ctx.fill();
+      if (mode === 'tap') { ctx.beginPath(); ctx.moveTo(pts[pts.length - 1][0], pts[pts.length - 1][1]); ctx.lineTo(pts[0][0], pts[0][1]); ctx.setLineDash([8, 8]); ctx.lineWidth = 3; ctx.strokeStyle = '#00e5ff'; ctx.stroke(); ctx.setLineDash([]); }
+    }
   }
-  if (mode === 'tap') for (const [x, y] of pts) { ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 3; ctx.stroke(); }
+  if (mode !== 'tap') return;
+  // 辺の中点（点を追加できる小さな丸）
+  if (pts.length >= 2) for (const [x, y] of midpoints(pts)) { ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#0097a7'; ctx.stroke(); }
+  // 頂点（番号つき）
+  pts.forEach(([x, y], i) => {
+    ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#00b8d4'; ctx.stroke();
+    ctx.fillStyle = '#0b3a48'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(i + 1), x, y + 0.5);
+  });
 }
 function finishStroke() {
   const d = S.drawing;
@@ -630,7 +672,7 @@ function bindUI() {
   $('#fab').onclick = startDrawing;
   $('#btnDrawCancel').onclick = cancelDrawing;
   $('#btnDrawRedo').onclick = () => setDrawMode(S.drawing.mode);
-  $('#btnDrawUndo').onclick = () => { const d = S.drawing; d.pts.pop(); drawPreview(d.pts.length >= 3); $('#btnDrawDone').disabled = d.pts.length < 3; };
+  $('#btnDrawUndo').onclick = () => { const d = S.drawing; d.pts.pop(); updateTapUI(); };
   $('#btnDrawDone').onclick = commitDrawing;
   $('#modeFree').onclick = () => setDrawMode('free');
   $('#modeTap').onclick = () => setDrawMode('tap');
