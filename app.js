@@ -90,7 +90,8 @@ const SupabaseStore = {
     document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
   },
 };
-const USE_SUPABASE = !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY && window.supabase);
+// 開発用：URLに ?local=1 を付けると共有データに触らず端末内保存で動く
+const USE_SUPABASE = !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY && window.supabase) && !new URLSearchParams(location.search).has('local');
 const store = USE_SUPABASE ? SupabaseStore : LocalStore;
 
 /* ---------------- 状態 ---------------- */
