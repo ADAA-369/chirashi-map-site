@@ -29,7 +29,8 @@ h1,h2,h3{margin:0 0 8px}
 #noticeBanner.lock{background:#4a1214;color:#ffb3b5;border-color:#7a1e22}
 
 /* map */
-#map{flex:1;position:relative;min-height:0}
+#mapWrap{flex:1;position:relative;min-height:0}
+#map{position:absolute;inset:0}
 
 /* draw layer */
 #drawLayer{position:absolute;inset:0;z-index:20;touch-action:none}

@@ -116,6 +116,8 @@ function toast(msg, ms = 2200) { const t = $('#toast'); t.textContent = msg; t.h
 
 /* ---------------- 起動 ---------------- */
 window.addEventListener('DOMContentLoaded', init);
+window.addEventListener('error', e => { console.error(e.error || e.message); toast('エラー: ' + (e.message || '不明').slice(0, 80), 5000); });
+window.addEventListener('unhandledrejection', e => { console.error(e.reason); toast('エラー: ' + String(e.reason?.message || e.reason).slice(0, 80), 5000); });
 
 async function init() {
   bindUI();
@@ -367,13 +369,15 @@ function startDrawing() {
   S.infoWin.close(); closeSheet();
   const layer = $('#drawLayer'), cv = $('#drawCanvas');
   layer.hidden = false;
-  const rect = $('#map').getBoundingClientRect();
-  cv.width = rect.width * devicePixelRatio; cv.height = rect.height * devicePixelRatio;
-  const ctx = cv.getContext('2d'); ctx.scale(devicePixelRatio, devicePixelRatio);
+  const rect = layer.getBoundingClientRect();
+  cv.width = Math.round(rect.width * devicePixelRatio); cv.height = Math.round(rect.height * devicePixelRatio);
+  const ctx = cv.getContext('2d'); ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
   S.drawing = { pts: [], ctx, rect, active: false, mode: S.drawMode || 'free', down: null };
   setDrawMode(S.drawing.mode);
   $('#fab').hidden = true;
   layer.onpointerdown = e => {
+    if (e.target !== cv) return;              // ボタン上の操作は無視
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault(); layer.setPointerCapture?.(e.pointerId);
     const d = S.drawing; d.down = [e.clientX, e.clientY];
     if (d.mode === 'free') { d.active = true; d.pts = []; addPt(e); }
@@ -381,6 +385,7 @@ function startDrawing() {
   layer.onpointermove = e => { const d = S.drawing; if (d?.mode === 'free' && d.active) { e.preventDefault(); addPt(e); } };
   layer.onpointerup = layer.onpointercancel = e => {
     const d = S.drawing; if (!d) return;
+    if (e.target !== cv && !d.active && !d.down) return;
     if (d.mode === 'free') { if (!d.active) return; d.active = false; finishStroke(); return; }
     // 点で囲む：動かさずに離した時だけ点を追加
     if (d.down && Math.hypot(e.clientX - d.down[0], e.clientY - d.down[1]) < 8) {
@@ -429,7 +434,9 @@ function cancelDrawing() {
   $('#drawLayer').hidden = true; $('#fab').hidden = false; S.drawing = null;
 }
 function commitDrawing() {
-  const d = S.drawing; const projection = S.proj.getProjection();
+  const d = S.drawing; if (!d) return;
+  if ((d.mode === 'free' && d.pts.length < 8) || (d.mode === 'tap' && d.pts.length < 3)) { toast('先に範囲を描いてください'); return; }
+  const projection = S.proj.getProjection();
   let coords = d.pts.map(([x, y]) => { const ll = projection.fromContainerPixelToLatLng(new google.maps.Point(x, y)); return [ll.lng(), ll.lat()]; });
   coords.push(coords[0]);
   let poly = turf.polygon([coords]);
