@@ -3,8 +3,8 @@
  "short_name": "配布MAP",
  "start_url": "./",
  "display": "standalone",
- "background_color": "#0f1720",
- "theme_color": "#1e3a5f",
+ "background_color": "#111111",
+ "theme_color": "#FD7E00",
  "lang": "ja",
  "icons": [
   {

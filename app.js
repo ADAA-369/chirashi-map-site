@@ -94,8 +94,8 @@ const SupabaseStore = {
     return { ...DEFAULT_SETTINGS, ...d };
   },
   async saveSettings(s) {
-    const flyers = (s.flyers || []).filter(f => !f.orphan); const { members, noticeDate, cities, admins } = s;
-    const { error } = await this.client.from('settings').upsert({ id: 'main', data: { flyers, members, noticeDate, cities, admins: admins || [] }, updated_at: new Date().toISOString() });
+    const flyers = (s.flyers || []).filter(f => !f.orphan); const { members, noticeDate, cities, admins, termEndDate } = s;
+    const { error } = await this.client.from('settings').upsert({ id: 'main', data: { flyers, members, noticeDate, cities, admins: admins || [], termEndDate: termEndDate || '' }, updated_at: new Date().toISOString() });
     if (error) { console.error(error); toast('設定の保存に失敗しました（通信）'); throw error; }
   },
   async addMember(name) {
@@ -134,7 +134,7 @@ const SupabaseStore = {
   async saveAssignment(x) { const { error } = await this.client.from('assignments').upsert({ id: x.id, member: x.member || null, flyer_id: x.flyer_id || null, polygon: x.polygon, due: x.due || null, note: x.note || '', status: x.status || 'planned', est_setai: x.est_setai ?? null, town: x.town || null, created_by: x.created_by || S.user || null, updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
   async deleteAssignment(id) { const { error } = await this.client.from('assignments').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id); if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; } },
   async loadEvents() { const { data, error } = await this.client.from('spot_events').select('*').eq('deleted', false).order('date'); if (error) { console.error(error); return S.events || []; } return data; },
-  async saveEvent(x) { const { error } = await this.client.from('spot_events').upsert({ id: x.id, spot_id: x.spot_id, date: x.date, time: x.time || '', member: x.member || null, memo: x.memo || '', done: !!x.done, updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
+  async saveEvent(x) { const { error } = await this.client.from('spot_events').upsert({ id: x.id, spot_id: x.spot_id, date: x.date, time: x.time || '', member: x.member || null, memo: x.memo || '', done: !!x.done, attendees: Array.isArray(x.attendees) ? x.attendees : [], updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
   async deleteEvent(id) { const { error } = await this.client.from('spot_events').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id); if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; } },
   // 15秒ごと＋画面復帰時：まず軽い「更新スタンプ」だけ取り、変わった時だけ全件取得（通信量を1/100以下に）
   subscribe(cb) {
@@ -320,12 +320,26 @@ async function initMap() {
   const zoomBy = d => S.map.setZoom(S.map.getZoom() + d);
   const holdZoom = (btn, d) => { let t = null, rep = null; const start = e => { e.preventDefault(); zoomBy(d); t = setTimeout(() => { rep = setInterval(() => zoomBy(d), 220); }, 400); }; const stop = () => { clearTimeout(t); clearInterval(rep); t = rep = null; }; btn.addEventListener('pointerdown', start); btn.addEventListener('pointerup', stop); btn.addEventListener('pointercancel', stop); btn.addEventListener('pointerleave', stop); };
   holdZoom($('#zoomIn'), 0.35); holdZoom($('#zoomOut'), -0.35);
+  // 地図を長押し → ピンを立てて「ここで何をする？」（誤爆防止：1本指・動かさない・0.7秒・描画中などは無効）
+  const mapEl = $('#map'); let lp = null, pointers = 0;
+  const cancelLp = () => { if (lp) { clearTimeout(lp.timer); lp = null; } };
+  mapEl.addEventListener('pointerdown', e => {
+    pointers++;
+    if (pointers !== 1 || S.drawing || S.adjust || S.pin || S.boardAdding || S.spotAdding || !document.querySelector('#sheet').hidden) { cancelLp(); return; }
+    const sx = e.clientX, sy = e.clientY;
+    lp = { sx, sy, timer: setTimeout(() => { lp = null; const r = mapEl.getBoundingClientRect(); const ll = S.proj.getProjection().fromContainerPixelToLatLng(new google.maps.Point(sx - r.left, sy - r.top)); if (navigator.vibrate) try { navigator.vibrate(25); } catch { } quickPin(ll); }, 700) };
+  }, { capture: true });
+  mapEl.addEventListener('pointermove', e => { if (lp && Math.hypot(e.clientX - lp.sx, e.clientY - lp.sy) > 8) cancelLp(); }, { capture: true });
+  const up = () => { pointers = Math.max(0, pointers - 1); cancelLp(); };
+  mapEl.addEventListener('pointerup', up, { capture: true }); mapEl.addEventListener('pointercancel', up, { capture: true });
+  mapEl.addEventListener('wheel', cancelLp, { capture: true, passive: true });
 
   S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); });
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
     styleTowns();
-    const z = S.map.getZoom(); if (S._lastZoom !== undefined && z !== S._lastZoom) { renderRecords(); renderAssignments(); renderSpots(); } S._lastZoom = z;
+    const z = S.map.getZoom();
+    clearTimeout(S._idleT); S._idleT = setTimeout(() => { if (S.drawing || S.adjust) return; renderRecords(); renderAssignments(); if (S._lastZoom !== undefined && z !== S._lastZoom) renderSpots(); S._lastZoom = z; }, 250);
   });
 }
 
@@ -445,6 +459,9 @@ function recPolygon(r) {
   return p;
 }
 const bboxHit = (a, b) => !(a[0] > b[2] || a[2] < b[0] || a[1] > b[3] || a[3] < b[1]);
+function viewBbox(pad = 0.3) {
+  try { const b = S.map.getBounds(); if (!b) return null; const sw = b.getSouthWest(), ne = b.getNorthEast(); const dx = (ne.lng() - sw.lng()) * pad, dy = (ne.lat() - sw.lat()) * pad; return [sw.lng() - dx, sw.lat() - dy, ne.lng() + dx, ne.lat() + dy]; } catch { return null; }
+}
 
 function filteredRecords() {
   const p = S.filter.period;
@@ -469,9 +486,9 @@ function renderRecords() {
   for (const p of S.overlapPolys) p.setMap(null);
   S.overlapPolys = [];
   const recs = filteredRecords();
-  // 同じ範囲（group_id）にまとめる
+  const vb = viewBbox(0.3);   // 画面に映っている範囲だけ描画
   const groups = new Map();
-  for (const r of recs) { const k = r.group_id || r.id; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
+  for (const r of recs) { if (vb && !bboxHit(recPolygon(r).bbox, vb)) continue; const k = r.group_id || r.id; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
   for (const [k, list] of groups) {
     const r = list[0]; const f = flyerOf(r.flyer_id); const f2 = list.length > 1 ? flyerOf(list[1].flyer_id) : null;
     const poly = new google.maps.Polygon({
@@ -901,6 +918,8 @@ function showSettings() {
     <label>1行に1人<textarea id="sMembers" rows="4">${esc(s.members.join('\n'))}</textarea></label>
     <h4 style="margin:18px 0 4px">管理者</h4>
     <label>1行に1人。空欄なら全員が設定・削除できます。入れると、その人だけが設定変更・削除・割り当て作成・一覧取り込みをできます<textarea id="sAdmins" rows="2">${esc((s.admins || []).join('\n'))}</textarea></label>
+    <h4 style="margin:18px 0 4px">任期満了日（二連ポスターの撤去期限の計算用）</h4>
+    <label>候補者名入りの政治活動用ポスターは、この日の6か月前の翌日から掲示禁止<input id="sTermEnd" type="date" value="${esc(s.termEndDate || '')}"></label>
     <h4 style="margin:18px 0 4px">告示日</h4>
     <label>この日以降は登録をロックします<input id="sNotice" type="date" value="${esc(s.noticeDate || '')}"></label>
     <div class="btnRow"><button class="ghost" id="sCancel">やめる</button><button class="primary" id="sSave">保存する</button></div>
@@ -921,6 +940,7 @@ function showSettings() {
     const admins = $('#sAdmins').value.split('\n').map(x => x.trim()).filter(Boolean);
     if (admins.length && !admins.includes(S.user) && !confirm('自分（' + S.user + '）が管理者に入っていません。保存すると設定を開けなくなります。よろしいですか？')) return;
     s.admins = admins;
+    s.termEndDate = $('#sTermEnd').value || '';
     s.noticeDate = $('#sNotice').value;
     $('#sSave').disabled = true;
     try {
@@ -971,7 +991,9 @@ const BOARD_STYLE = {
   check:    { color: '#f2a93b', label: '？', name: '要確認' },
 };
 const BOARD_ST_LABEL = k => BOARD_STYLE[k]?.name || k;
-const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: '掲示場' }, general: { name: '一般ポスター（支援者宅・店舗など）', short: '一般' } };
+const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: '掲示場' }, general: { name: '一般ポスター（支援者宅・店舗など）', short: '一般' }, political: { name: '政治活動用ポスター（二連・演説会告知）', short: '二連' } };
+function politicalColor(b) { if (!b.posted_at) return '#9aa7b4'; const d = (new Date(today()) - new Date(b.posted_at)) / 86400000; return d < 90 ? '#3fb950' : d < 180 ? '#facc15' : '#ef4444'; }
+function posterBanDate() { const t = S.settings?.termEndDate; if (!t) return null; const d = new Date(t); d.setMonth(d.getMonth() - 6); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); }
 // 看板の形のアイコン（SVG）。絵が主役：掲示板にポスターが貼られた図。色＝状態、番号は下に小さく
 function boardIcon(kind, color, text, status) {
   const t = String(text || '').slice(0, 4);
@@ -983,6 +1005,11 @@ function boardIcon(kind, color, text, status) {
     // 掲示板：木の支柱＋白い板に4枚のポスター
     : `<rect x='22' y='34' width='4' height='14' fill='#6b4f2a'/><rect x='5' y='6' width='38' height='30' rx='2' fill='#f7f3e8' stroke='#5b4630' stroke-width='2'/><rect x='9' y='10' width='14' height='10' fill='${color}'/><rect x='25' y='10' width='14' height='10' fill='#e11d48' opacity='.75'/><rect x='9' y='22' width='14' height='10' fill='#2563eb' opacity='.75'/><rect x='25' y='22' width='14' height='10' fill='#f59e0b' opacity='.75'/>`;
   const num = t ? `<rect x='12' y='40' width='24' height='13' rx='6.5' fill='#111' opacity='.85'/><text x='24' y='50' font-size='10' font-weight='700' text-anchor='middle' fill='#fff' font-family='sans-serif'>${t}</text>` : '';
+  if (kind === 'political') {
+    const board2 = `<rect x='6' y='8' width='16' height='26' rx='1.5' fill='#fff' stroke='#333' stroke-width='1.5'/><rect x='26' y='8' width='16' height='26' rx='1.5' fill='#fff' stroke='#333' stroke-width='1.5'/><rect x='8' y='10' width='12' height='9' fill='${color}'/><rect x='28' y='10' width='12' height='9' fill='${color}'/><rect x='8' y='21' width='12' height='2' fill='#333'/><rect x='28' y='21' width='12' height='2' fill='#333'/><rect x='8' y='25' width='9' height='2' fill='#333'/><rect x='28' y='25' width='9' height='2' fill='#333'/>`;
+    const svg2 = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><rect x='1' y='1' width='46' height='54' rx='8' fill='${color}' stroke='#fff' stroke-width='2'/><rect x='4' y='4' width='40' height='48' rx='6' fill='#fff' opacity='.25'/>${board2}${num}${badge}</svg>`;
+    return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg2), scaledSize: new google.maps.Size(48, 56), anchor: new google.maps.Point(24, 52) };
+  }
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><rect x='1' y='1' width='46' height='54' rx='8' fill='${color}' opacity='.25'/>${board}${num}${badge}</svg>`;
   return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), scaledSize: new google.maps.Size(48, 56), anchor: new google.maps.Point(24, 52) };
 }
@@ -1005,18 +1032,20 @@ function setBoardAdding(on) {
 function renderBoards() {
   for (const m of S.boardMarkers.values()) m.setMap(null);
   S.boardMarkers.clear();
-  const off = S.boards.filter(b => (b.kind || 'official') === 'official'), gen = S.boards.filter(b => b.kind === 'general');
+  const off = S.boards.filter(b => (b.kind || 'official') === 'official'), gen = S.boards.filter(b => b.kind === 'general'), pol = S.boards.filter(b => b.kind === 'political');
   const cnt = a => { const d = a.filter(b => b.status === 'done').length; return `${d}/${a.length}${a.length ? `（${Math.round(d / a.length * 100)}%）` : ''}`; };
   const bad = S.boards.filter(b => b.status === 'damaged' || b.status === 'check').length;
-  $('#boardStat').textContent = `掲示場 ${cnt(off)}　一般 ${cnt(gen)}${bad ? `　⚠${bad}` : ''}`;
+  const ban = posterBanDate(); const banSoon = ban && pol.some(b => b.status === 'done') ? Math.ceil((new Date(ban) - new Date(today())) / 86400000) : null;
+  $('#boardStat').textContent = `掲示場 ${cnt(off)}　一般 ${cnt(gen)}${pol.length ? `　二連 ${cnt(pol)}` : ''}${bad ? `　⚠${bad}` : ''}${banSoon != null && banSoon <= 60 ? `　🚫二連は${banSoon > 0 ? `あと${banSoon}日で` : ''}撤去期限${banSoon <= 0 ? '超過' : ''}` : ''}`;
   if (!S.boardsOn) return;
   for (const b of S.boards) {
     const kind = b.kind || 'official';
     if (S.boardKindFilter !== 'all' && kind !== S.boardKindFilter) continue;
     const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
+    const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : st.color;
     const m = new google.maps.Marker({
       position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20,
-      icon: boardIcon(kind, st.color, b.no, b.status),
+      icon: boardIcon(kind, color, b.no, b.status),
       title: `${b.no ? b.no + ' ' : ''}${b.place || ''}（${BOARD_ST_LABEL(b.status)}）`,
     });
     m.addListener('click', () => { if (!S.boardAdding) showBoard(b); });
@@ -1028,12 +1057,12 @@ async function addBoardAt(latLng) {
   startPinPlace(latLng, pos => addBoardForm(pos), 'ポスターを貼る場所にピンを合わせて「ここに決定」');
 }
 async function addBoardForm(latLng) {
-  const kind = S.boardKindFilter === 'general' ? 'general' : 'official';
+  const kind = ['general', 'political'].includes(S.boardKindFilter) ? S.boardKindFilter : 'official';
   const sameKind = S.boards.filter(x => (x.kind || 'official') === kind);
   const b = { id: uid(), kind, no: String(sameKind.length + 1), place: '', lat: +latLng.lat().toFixed(6), lng: +latLng.lng().toFixed(6), status: 'todo', memo: '' };
   openSheet(`
     <h3>ポスターの場所を追加</h3>
-    <label>種類<select id="bKind"><option value="official" ${kind === 'official' ? 'selected' : ''}>選挙用ポスター掲示場（告示後に貼る公営の看板）</option><option value="general" ${kind === 'general' ? 'selected' : ''}>一般ポスター（支援者宅・店舗などに貼る）</option></select></label>
+    <label>種類<select id="bKind"><option value="official" ${kind === 'official' ? 'selected' : ''}>選挙用ポスター掲示場（告示後に貼る公営の看板）</option><option value="general" ${kind === 'general' ? 'selected' : ''}>一般ポスター（支援者宅・店舗などに貼る）</option><option value="political" ${kind === 'political' ? 'selected' : ''}>政治活動用ポスター（二連・演説会告知）</option></select></label>
     <label>番号（掲示場一覧の番号・任意）<input id="bNo" type="text" inputmode="numeric" value="${esc(b.no)}"></label>
     <label>場所（目印）<input id="bPlace" type="text" placeholder="例：蟹江小学校 正門横／○○商店の壁"></label>
     <div class="btnRow"><button class="ghost" id="bCancel">やめる</button><button class="primary" id="bSave">追加する</button></div>
@@ -1049,18 +1078,19 @@ async function showBoard(b) {
   const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
   openSheet(`
     <h3>📌 ${BOARD_KIND[b.kind || 'official'].short} ${esc(b.no)} ${esc(b.place)}</h3>
-    <div class="small">${BOARD_KIND[b.kind || 'official'].name}</div>
+    <div class="small">${BOARD_KIND[b.kind || 'official'].name}${b.kind === 'political' && b.posted_at ? `　／　設置から ${Math.floor((new Date(today()) - new Date(b.posted_at)) / 86400000)} 日${posterBanDate() ? `　／　撤去期限 ${posterBanDate()}（任期満了6か月前）` : ''}` : ''}</div>
+    ${b.kind === 'political' ? '<div class="small">※候補者名入りの政治活動用ポスターは任期満了日の6か月前から投票日まで掲示できません。掲示責任者・印刷者の表示と、掲示場所の所有者の許諾を確認</div>' : ''}
     <div class="stTabs stTabs6">
       ${Object.entries(BOARD_STYLE).map(([k, v]) => `<button data-st="${k}" class="${b.status === k ? 'on' : ''}" style="color:${v.color}">${v.label === '未' ? '未着手' : v.label === '予' ? '予約' : v.label === '中' ? '対応中' : v.label === '済' ? '完了' : v.label === '異' ? '異常' : '要確認'}</button>`).join('')}
     </div>
     <label>担当・貼った人<select id="bBy">${S.settings.members.map(m => `<option ${((b.posted_by || S.user) === m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
-    <label>日付<input id="bDate" type="date" value="${esc(b.posted_at || today())}"></label>
+    <label>${b.kind === 'political' ? '設置日' : '日付'}<input id="bDate" type="date" value="${esc(b.posted_at || today())}"></label>
     <label>写真（任意・自動で縮小します）<input id="bPhoto" type="file" accept="image/*" capture="environment"></label>
     <div class="photoBox" id="bPhotoBox">${b.photo_path ? '<div class="small">写真を読み込み中…</div>' : ''}</div>
     <label>メモ（例：破損あり、貼る位置が高い）<input id="bMemo" type="text" value="${esc(b.memo || '')}"></label>
     ${extLinks(b.lat, b.lng)}
     <details style="margin-top:10px"><summary class="small">種類・番号・場所を直す／削除</summary>
-      <label>種類<select id="bKind"><option value="official" ${(b.kind || 'official') === 'official' ? 'selected' : ''}>選挙用ポスター掲示場</option><option value="general" ${b.kind === 'general' ? 'selected' : ''}>一般ポスター</option></select></label>
+      <label>種類<select id="bKind"><option value="official" ${(b.kind || 'official') === 'official' ? 'selected' : ''}>選挙用ポスター掲示場</option><option value="general" ${b.kind === 'general' ? 'selected' : ''}>一般ポスター</option><option value="political" ${b.kind === 'political' ? 'selected' : ''}>政治活動用ポスター（二連）</option></select></label>
       <label>番号<input id="bNo" type="text" value="${esc(b.no)}"></label>
       <label>場所<input id="bPlace" type="text" value="${esc(b.place)}"></label>
       <div class="btnRow"><button class="ghost" id="bMove">📍 位置を直す</button>${isAdmin() ? '<button class="ghost" id="bDel" style="color:var(--danger)">この掲示場を削除</button>' : ''}</div>
@@ -1109,7 +1139,7 @@ function showBoardList() {
   const sum = k => { const a = rows.filter(b => (b.kind || 'official') === k); const d = a.filter(b => b.status === 'done').length; return `${BOARD_KIND[k].short} ${d}/${a.length}${a.length ? `＝${Math.round(d / a.length * 100)}%` : ''}（異常${a.filter(b => b.status === 'damaged').length}・要確認${a.filter(b => b.status === 'check').length}）`; };
   openSheet(`
     <h3>ポスター一覧</h3>
-    <div class="small">${sum('official')} ／ ${sum('general')}</div>
+    <div class="small">${sum('official')} ／ ${sum('general')} ／ ${sum('political')}</div>
     <div class="stTabs"><button id="blAll" class="${S.boardListOnlyOpen ? '' : 'on'}">すべて</button><button id="blOpen" class="${S.boardListOnlyOpen ? 'on' : ''}">未完了だけ</button></div>
     <div class="tableWrap"><table><thead><tr><th>種類</th><th>番号</th><th>場所</th><th>状態</th><th>担当</th><th>日付</th><th>写真</th></tr></thead><tbody>
     ${rows.filter(b => !S.boardListOnlyOpen || b.status !== 'done').map(b => `<tr data-id="${b.id}"><td>${BOARD_KIND[b.kind || 'official'].short}</td><td>${esc(b.no)}</td><td>${esc(b.place)}</td><td style="color:${BOARD_STYLE[b.status]?.color}">${BOARD_ST_LABEL(b.status)}</td><td>${esc(b.posted_by || '')}</td><td>${b.posted_at ? fmtDate(b.posted_at) : ''}</td><td>${b.photo_path ? '📷' : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="small">まだ登録がありません。「＋ 場所を追加」で地図に置いてください</td></tr>'}
@@ -1204,7 +1234,8 @@ function addSpotForm(latLng) {
 function showSpot(sp) {
   const k = SPOT_KIND[sp.kind] || SPOT_KIND.other;
   const evs = spotEvents(sp.id), up = upcoming(evs), hist = history(evs);
-  const evRow = e => `<div class="evRow" data-id="${e.id}"><span class="d">${fmtDate(e.date)} ${esc(e.time)}</span><span class="m">${esc(e.member || '')} ${esc(e.memo || '')}</span>${e.done ? '<span class="small">済</span>' : `<button class="ghost evDone">実施した</button>`}<button class="ghost evDel">削除</button></div>`;
+  const evRow = e => { const at = Array.isArray(e.attendees) ? e.attendees : []; const me = at.includes(S.user);
+    return `<div class="evRow" data-id="${e.id}"><span class="d">${fmtDate(e.date)} ${esc(e.time)}</span><span class="m">${esc(e.member || '')} ${esc(e.memo || '')}${!e.done && at.length ? `<br><span class="small">参加 ${at.length}人：${esc(at.join('・'))}</span>` : ''}</span>${e.done ? '<span class="small">済</span>' : `<button class="ghost evJoin ${me ? 'on' : ''}">${me ? '参加をやめる' : '参加する'}</button><button class="ghost evDone">実施した</button>`}<button class="ghost evDel">削除</button></div>`; };
   openSheet(`
     <h3>${k.emoji} ${esc(sp.name)}</h3>
     <div class="small">${k.name}${sp.memo ? ' ／ ' + esc(sp.memo) : ''}</div>
@@ -1234,6 +1265,7 @@ function showSpot(sp) {
     S.spots = await store.loadSpots(); renderSpots(); showSpot(S.spots.find(x => x.id === sp.id) || nsp); toast('保存しました');
   };
   if ($('#spDel')) $('#spDel').onclick = async () => { if (!confirm(`「${sp.name}」を削除しますか？（予定・実績も見えなくなります）`)) return; try { await store.deleteSpot(sp.id); } catch { return; } S.spots = await store.loadSpots(); closeSheet(); renderSpots(); toast('削除しました'); };
+  $('#sheetBody').querySelectorAll('.evJoin').forEach(b => b.onclick = async () => { const e = S.events.find(x => x.id === b.closest('.evRow').dataset.id); if (!e) return; const at = Array.isArray(e.attendees) ? [...e.attendees] : []; const i = at.indexOf(S.user); if (i >= 0) at.splice(i, 1); else at.push(S.user); try { await store.saveEvent({ ...e, attendees: at }); } catch { return; } S.events = await store.loadEvents(); showSpot(sp); toast(i >= 0 ? '参加を取り消しました' : '参加登録しました'); });
   $('#sheetBody').querySelectorAll('.evDone').forEach(b => b.onclick = async () => { const e = S.events.find(x => x.id === b.closest('.evRow').dataset.id); if (!e) return; try { await store.saveEvent({ ...e, done: true, member: e.member || S.user }); } catch { return; } S.events = await store.loadEvents(); renderSpots(); showSpot(sp); toast('実施済みにしました'); });
   $('#sheetBody').querySelectorAll('.evDel').forEach(b => b.onclick = async () => { const id = b.closest('.evRow').dataset.id; if (!confirm('この予定／記録を削除しますか？')) return; try { await store.deleteEvent(id); } catch { return; } S.events = await store.loadEvents(); renderSpots(); showSpot(sp); });
 }
@@ -1259,16 +1291,17 @@ function openEventForm(sp, ev) {
 function showSpotList() {
   const name = id => S.spots.find(s => s.id === id)?.name || '(削除済み)';
   const up = upcoming(S.events), hist = history(S.events);
-  const row = e => `<tr data-spot="${e.spot_id}" data-ev="${e.id}"><td>${fmtDate(e.date)}</td><td>${esc(e.time)}</td><td>${esc(name(e.spot_id))}</td><td>${esc(e.member || '')}</td><td>${esc(e.memo || '')}</td></tr>`;
+  const row = e => `<tr data-spot="${e.spot_id}" data-ev="${e.id}"><td>${fmtDate(e.date)}</td><td>${esc(e.time)}</td><td>${esc(name(e.spot_id))}</td><td>${esc(e.member || '')}${!e.done && Array.isArray(e.attendees) && e.attendees.length ? `<br><span class="small">参加${e.attendees.length}：${esc(e.attendees.join('・'))}</span>` : ''}</td><td>${esc(e.memo || '')}</td></tr>`;
   openSheet(`
     <h3>辻立ち・活動の予定と実績</h3>
     <h4 style="margin:10px 0 4px">今後の予定（${up.length}件）</h4>
     <div class="tableWrap"><table><thead><tr><th>日付</th><th>時間</th><th>場所</th><th>担当</th><th>メモ</th></tr></thead><tbody>${up.map(row).join('') || '<tr><td colspan="5" class="small">予定はありません。地図のピンをタップ →「＋ 予定を追加」</td></tr>'}</tbody></table></div>
     <h4 style="margin:14px 0 4px">実施済み（${hist.length}件）</h4>
     <div class="tableWrap"><table><thead><tr><th>日付</th><th>時間</th><th>場所</th><th>実施</th><th>メモ</th></tr></thead><tbody>${hist.map(row).join('') || '<tr><td colspan="5" class="small">まだありません</td></tr>'}</tbody></table></div>
-    <div class="btnRow"><button class="primary" id="slClose">閉じる</button></div>
+    <div class="btnRow"><button class="ghost" id="slCopy">📋 予定と参加者をLINE用にコピー</button><button class="primary" id="slClose">閉じる</button></div>
   `);
   $('#slClose').onclick = closeSheet;
+  $('#slCopy').onclick = () => copyText(['【辻立ち・活動の予定】', ...up.map(e => { const at = Array.isArray(e.attendees) ? e.attendees : []; return `${fmtDate(e.date)} ${e.time || ''}　${name(e.spot_id)}${e.member ? '（担当 ' + e.member + '）' : ''}${at.length ? `　参加${at.length}人：${at.join('・')}` : '　参加者募集中'}${e.memo ? '　' + e.memo : ''}`; }), up.length ? '' : '（予定はありません）', '', 'アプリで「参加する」を押してください'].join('\n'));
   $('#sheetBody').querySelectorAll('tr[data-spot]').forEach(tr => tr.onclick = () => { const sp = S.spots.find(x => x.id === tr.dataset.spot); if (!sp) return; S.map.panTo({ lat: sp.lat, lng: sp.lng }); showSpot(sp); });
   (async () => { for (const tr of [...$('#sheetBody').querySelectorAll('tr[data-ev]')]) { const e = S.events.find(x => x.id === tr.dataset.ev); const sp = e && S.spots.find(x => x.id === e.spot_id); if (!sp) continue; const inTen = (new Date(e.date) - new Date(today())) / 86400000; if (inTen < 0 || inTen > 7) continue; const w = await weatherFor(sp.lat, sp.lng, e.date, e.time); if (w) tr.querySelector('td:last-child').insertAdjacentHTML('beforeend', ` <span class="wx">${esc(w.text)}</span>`); } })();
 }
@@ -1399,7 +1432,9 @@ function renderAssignments() {
   const mine = open.filter(a => a.member === S.user).length;
   $('#assignStat').textContent = `割り当て 未完了 ${open.length}件（自分 ${mine}）`;
   const showLabels = S.map.getZoom() >= 14;
+  const vb = viewBbox(0.3);
   for (const a of open) {
+    if (vb && !bboxHit(turf.bbox(turf.polygon([a.polygon])), vb)) continue;
     const isMine = a.member === S.user;
     const col = isMine ? '#ffd60a' : '#cbd5e1';
     const poly = new google.maps.Polygon({ paths: a.polygon.map(([lng, lat]) => ({ lat, lng })), strokeColor: col, strokeOpacity: 1, strokeWeight: 3, fillColor: col, fillOpacity: isMine ? 0.18 : 0.08, map: S.map, zIndex: 1, icons: undefined });
@@ -1709,6 +1744,29 @@ function showStudy(tab = 'core') {
   `);
   $('#stClose').onclick = closeSheet;
   $('#sheetBody').querySelectorAll('.stTabs button').forEach(b => b.onclick = () => showStudy(b.dataset.t));
+}
+
+/* ---------------- 長押しピン：ここで何をする？ ---------------- */
+function quickPin(latLng) {
+  if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; }
+  S.searchMarker = new google.maps.Marker({ position: latLng, map: S.map, zIndex: 50, animation: google.maps.Animation.DROP,
+    icon: { path: 'M 0,0 C -2,-6 -12,-8 -12,-17 A 12,12 0 1,1 12,-17 C 12,-8 2,-6 0,0 Z', fillColor: '#e53935', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2, scale: 1.3 } });
+  const it = { lat: latLng.lat(), lng: latLng.lng(), name: '選んだ地点', sub: `${latLng.lat().toFixed(5)}, ${latLng.lng().toFixed(5)}` };
+  try { const pt = turf.point([it.lng, it.lat]); const t = S.towns.find(t => bboxHit([it.lng, it.lat, it.lng, it.lat], t.bbox) && turf.booleanPointInPolygon(pt, t.feature)); if (t) it.name = `${t.city} ${t.name}`; } catch { }
+  S.searchMarker.addListener('click', () => showSearchSheet(it));
+  const clearStar = () => { if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } closeSheet(); };
+  openSheet(`
+    <h3>📍 ${esc(it.name)}</h3>
+    <div class="small">長押しした地点。ここで何をしますか？</div>
+    <div class="btnRow"><button class="ghost" id="qpRecord">🗺 ここを含む範囲の配布を記録</button></div>
+    <div class="btnRow"><button class="ghost" id="qpSpot">🎤 拠点・辻立ちを追加</button><button class="ghost" id="qpBoard">📌 ポスター場所を追加</button></div>
+    ${extLinks(it.lat, it.lng)}
+    <div class="btnRow"><button class="primary" id="qpClose">閉じる（ピンも消える）</button></div>
+  `);
+  $('#qpClose').onclick = clearStar;
+  $('#qpRecord').onclick = () => { clearStar(); S.map.panTo(latLng); startDrawing(); };
+  $('#qpSpot').onclick = () => { if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } toggleSpotBar(true); addSpotForm(latLng); setTimeout(() => { const n = $('#spName'); if (n && !n.value && it.name !== '選んだ地点') n.value = it.name; }, 30); };
+  $('#qpBoard').onclick = () => { if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } toggleBoards(true); addBoardForm(latLng); setTimeout(() => { const n = $('#bPlace'); if (n && !n.value && it.name !== '選んだ地点') n.value = it.name; }, 30); };
 }
 
 /* ---------------- UI バインド ---------------- */
