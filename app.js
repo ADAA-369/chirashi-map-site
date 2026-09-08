@@ -430,6 +430,7 @@ function styleAdmin() {
 // 町丁目を「学戸一〜七丁目→学戸」のようにまとめた枠。data/oaza/ は tools/build_oaza.mjs で生成
 const OAZA_BASE = DATA_BASE.replace('by_city', 'oaza');
 const OAZA_COLOR = '#ffe270';
+const OAZA_BLACK = new Set(['蟹江町']);   // 地名の線を黒で描く市町村（まず蟹江町で試す）
 const oazaOn = () => localStorage.getItem('cm_oaza_on') !== '0';
 async function loadOaza() {
   if (!S.map) return;
@@ -452,7 +453,9 @@ async function loadOaza() {
 function styleOaza() {
   if (!S.oazaLayer || !S.map) return;
   const z = S.map.getZoom(); const on = oazaOn();
-  S.oazaLayer.setStyle({ visible: on && z >= 12.5, clickable: false, fillOpacity: 0, strokeColor: OAZA_COLOR, strokeOpacity: 0.9, strokeWeight: z >= 16 ? 2.5 : z >= 14 ? 2 : 1.5, zIndex: 2 });
+  // 試行：蟹江町は黒線（本人判断待ち）。ほかの市町村は淡い黄色のまま
+  S.oazaLayer.setStyle(f => { const c = OAZA_BLACK.has(f.getProperty('city')) ? '#111' : OAZA_COLOR;
+    return { visible: on && z >= 12.5, clickable: false, fillOpacity: 0, strokeColor: c, strokeOpacity: 0.9, strokeWeight: z >= 16 ? 2.5 : z >= 14 ? 2 : 1.5, zIndex: 2 }; });
 }
 // 地名ラベル：表示範囲内だけ描く。タップで地名全体の配布率
 function renderOazaLabels() {
