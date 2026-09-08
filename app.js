@@ -33,7 +33,7 @@ const LocalStore = {
     localStorage.setItem(this.key, JSON.stringify(a));
   },
   async loadSettings() {
-    try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(this.skey) || '{}') }; } catch { return { ...DEFAULT_SETTINGS }; }
+    try { return normalizeSettings(JSON.parse(localStorage.getItem(this.skey) || '{}')); } catch { return { ...DEFAULT_SETTINGS }; }
   },
   async saveSettings(s) { localStorage.setItem(this.skey, JSON.stringify(s)); },
   async addMember(name) { const s = await this.loadSettings(); if (!s.members.includes(name)) { s.members.push(name); await this.saveSettings(s); } },
@@ -91,7 +91,7 @@ const SupabaseStore = {
     const d = data.data || {};
     if (d.flyers && !Array.isArray(d.flyers)) throw new Error('settings broken');
     if (d.members && !Array.isArray(d.members)) throw new Error('settings broken');
-    return { ...DEFAULT_SETTINGS, ...d };
+    return normalizeSettings(d);
   },
   async saveSettings(s) {
     const flyers = (s.flyers || []).filter(f => !f.orphan); const { members, noticeDate, cities, admins, termEndDate } = s;
@@ -141,12 +141,14 @@ const SupabaseStore = {
     const tick = async () => {
       if (document.hidden || S.drawing || S.adjust || S.pin || this._busy) return;
       this._busy = true; this._silent = true;
+      let payload = null;
       try {
         const { data: stamp, error } = await this.client.rpc('sync_stamp');
         if (error || stamp === this._stamp) return;
-        const [recs, sets, boards, spots, events, asg] = await Promise.all([this.loadRecords(), this.loadSettings(), this.loadBoards(), this.loadSpots(), this.loadEvents(), this.loadAssignments()]);
-        this._stamp = stamp; cb(recs, sets, boards, spots, events, asg);
+        const all = await Promise.all([this.loadRecords(), this.loadSettings(), this.loadBoards(), this.loadSpots(), this.loadEvents(), this.loadAssignments()]);
+        this._stamp = stamp; payload = all;
       } catch { } finally { this._busy = false; this._silent = false; }
+      if (payload) { try { cb(...payload); } catch (e) { console.error(e); toast('画面の更新でエラーが出ました（データは保存されています）', 4000); } }
     };
     this._timer = setInterval(tick, 15000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
@@ -205,6 +207,7 @@ async function init() {
   await initMap();
   await loadTowns();
   renderAll(); applyRole();
+  if (USE_SUPABASE) { try { const { data } = await SupabaseStore.client.rpc('sync_stamp'); SupabaseStore._stamp = data; } catch { } }
   if (localStorage.getItem('cm_rules_ack') !== String(RULES_VERSION)) setTimeout(() => showRules(true), 800);
   setInterval(renderNotice, 60000);
   store.subscribe((recs, sets, boards, spots, events, asg) => {
@@ -272,7 +275,7 @@ function showLogin(resolve, opt = {}) {
     S.user = name;
     localStorage.setItem('cm_user', JSON.stringify({ name, pass }));
     box.hidden = true; $('#inpPass').disabled = false;
-    $('#menuUser').textContent = `👤 ${name}`; if (S.map) applyRole();
+    $('#menuUser').textContent = `👤 ${name}`; if (S.map) { applyRole(); renderAll(); }
     resolve && resolve();
   };
 }
@@ -368,7 +371,7 @@ async function loadTowns() {
 }
 function styleTowns() {
   const z = S.map.getZoom();
-  const adding = S.boardAdding || S.spotAdding || !!S.drawing;
+  const adding = !overlaysClickable();
   S.map.data.setStyle({ visible: z >= 14, strokeColor: '#ffffff', strokeOpacity: z >= 16 ? 0.55 : 0.35, strokeWeight: 1, fillOpacity: 0, clickable: z >= 14 && !adding, zIndex: 1 });
 }
 // 追加モード：ポリゴンやピンがタップを横取りしないようにする
@@ -453,13 +456,18 @@ function overlapRatio(ring, flyerId, excludeIds = []) {
   return a / turf.area(me);
 }
 const isLocked = () => !!S.settings?.noticeDate && today() >= S.settings.noticeDate;
+const modeBusy = () => S.drawing ? '範囲を描いている途中です' : S.adjust ? '形を直している途中です' : S.pin ? 'ピンの位置合わせ中です' : null;
+function guardMode() { const m = modeBusy(); if (m) { toast(m + '。先に「決定」か「中止」を押してください'); return false; } return true; }
+function setBarsLocked(on) { for (const id of ['#boardBar', '#spotBar', '#assignBar']) { const el = $(id); if (el) el.style.pointerEvents = on ? 'none' : ''; } }
+const overlaysClickable = () => !(S.drawing || S.adjust || S.pin || S.boardAdding || S.spotAdding);
+const barOn = () => !!(S.boardsOn || S.spotBarOn || S.assignBarOn);
 
 /* ---------------- 記録の描画 ---------------- */
 const _polyCache = new Map();
 function recPolygon(r) {
   const k = r.id + '|' + (r.updated_at || '') + '|' + (r.polygon?.length || 0);
   let p = _polyCache.get(k);
-  if (!p) { p = turf.polygon([r.polygon]); p.bbox = turf.bbox(p); if (_polyCache.size > 3000) _polyCache.clear(); _polyCache.set(k, p); }
+  if (!p) { let ring = Array.isArray(r.polygon) ? r.polygon : []; if (ring.length >= 3 && (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1])) ring = [...ring, ring[0]]; p = turf.polygon([ring]); p.bbox = turf.bbox(p); if (_polyCache.size > 3000) _polyCache.clear(); _polyCache.set(k, p); }
   return p;
 }
 const bboxHit = (a, b) => !(a[0] > b[2] || a[2] < b[0] || a[1] > b[3] || a[3] < b[1]);
@@ -493,18 +501,18 @@ function renderRecords() {
   const vb = viewBbox(0.3);   // 画面に映っている範囲だけ描画
   const groups = new Map();
   for (const r of recs) { if (vb && !bboxHit(recPolygon(r).bbox, vb)) continue; const k = r.group_id || r.id; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
-  for (const [k, list] of groups) {
+  for (const [k, list] of groups) { try {
     const r = list[0]; const f = flyerOf(r.flyer_id); const f2 = list.length > 1 ? flyerOf(list[1].flyer_id) : null;
     const poly = new google.maps.Polygon({
       paths: r.polygon.map(([lng, lat]) => ({ lat, lng })),
       strokeColor: f2 ? f2.color : f.color, strokeOpacity: 0.95, strokeWeight: f2 ? 4 : 2,
-      fillColor: f.color, fillOpacity: 0.32, map: S.map, zIndex: 2,
+      fillColor: f.color, fillOpacity: 0.32, map: S.map, zIndex: 2, clickable: overlaysClickable(),
     });
     poly.addListener('click', ev => { if (!S.drawing) showRecord(r, ev.latLng); });
     S.polys.set(k, poly);
     if (showIcons) {
       const c = turf.centerOfMass(recPolygon(r)).geometry.coordinates;
-      const mk = new google.maps.Marker({ position: { lat: c[1], lng: c[0] }, map: S.map, zIndex: 4,
+      const mk = new google.maps.Marker({ position: { lat: c[1], lng: c[0] }, map: S.map, zIndex: 4, clickable: overlaysClickable(),
         icon: { path: google.maps.SymbolPath.CIRCLE, scale: S.map.getZoom() >= 13 ? 11 : 8, fillColor: f.color, fillOpacity: 0.95, strokeColor: '#fff', strokeWeight: 2 },
         label: S.map.getZoom() >= 13 ? { text: '📄', fontSize: '12px' } : undefined,
         title: `${fmtDate(r.date)} ${r.member} ${list.map(x => flyerOf(x.flyer_id).name + ' ' + x.count + '枚').join('／')}` });
@@ -517,7 +525,7 @@ function renderRecords() {
       const html = `<b>${fmtDate(r.date)}</b> ${esc(r.member)}<br>${lines}`;
       const lb = new RecLabel({ lat: c[1], lng: c[0] }, html, f.color); lb.setMap(S.map); S.labels.push(lb);
     }
-  }
+  } catch (e) { console.warn('bad record', k, e); } }
   // 同じチラシ同士の重なりを赤で表示（相手は期間に関係なく全記録）
   const byFlyer = {};
   for (const r of S.records) if (S.filter.flyers.has(r.flyer_id)) (byFlyer[r.flyer_id] ||= []).push(r);
@@ -544,11 +552,19 @@ function renderRecords() {
   }
 }
 
+const orphanFlyers = () => { const known = new Set(S.settings.flyers.map(f => f.id)); return [...new Set(S.records.map(r => r.flyer_id))].filter(id => !known.has(id)).map(id => ({ id, name: '(削除済み)', color: '#888888', orphan: true })); };
+const chipFlyers = () => [...S.settings.flyers, ...orphanFlyers()];
+const ID_OK = /^[\w.\-:]{1,60}$/;
+function normalizeSettings(d) {
+  const s0 = { ...DEFAULT_SETTINGS, ...(d || {}) };
+  s0.flyers = (Array.isArray(s0.flyers) ? s0.flyers : []).filter(f => f && ID_OK.test(String(f.id))).map(f => ({ id: String(f.id), name: String(f.name ?? ''), color: safeColor(f.color), total: Number(f.total) || 0 }));
+  s0.members = (Array.isArray(s0.members) ? s0.members : []).map(String); s0.admins = (Array.isArray(s0.admins) ? s0.admins : []).map(String);
+  s0.noticeDate = /^\d{4}-\d{2}-\d{2}$/.test(s0.noticeDate || '') ? s0.noticeDate : ''; s0.termEndDate = /^\d{4}-\d{2}-\d{2}$/.test(s0.termEndDate || '') ? s0.termEndDate : '';
+  return s0;
+}
 function renderChips() {
   const el = $('#flyerChips');
-  const known = new Set(S.settings.flyers.map(f => f.id));
-  for (const id of new Set(S.records.map(r => r.flyer_id))) if (!known.has(id)) { S.settings.flyers.push({ id, name: '(削除済み)', color: '#888888', orphan: true }); }
-  el.innerHTML = S.settings.flyers.map(f => `<button class="chip ${S.filter.flyers.has(f.id) ? 'on' : ''}" data-id="${esc(f.id)}" style="--c:${safeColor(f.color)}" draggable="true" title="ドラッグで並べ替え"><span class="dot"></span>${esc(f.name)}</button>`).join('');
+  el.innerHTML = chipFlyers().map(f => `<button class="chip ${S.filter.flyers.has(f.id) ? 'on' : ''}" data-id="${esc(f.id)}" style="--c:${safeColor(f.color)}" draggable="true" title="ドラッグで並べ替え"><span class="dot"></span>${esc(f.name)}</button>`).join('');
   el.querySelectorAll('.chip').forEach(c => {
     c.onclick = () => {
       const id = c.dataset.id; S._userToggled = true;
@@ -572,7 +588,7 @@ function renderChips() {
 function flyerTotals() {
   // 全期間の配布合計（期間フィルタに関係なく残り枚数を出す）
   const used = {}; for (const r of S.records) used[r.flyer_id] = (used[r.flyer_id] || 0) + (r.count || 0);
-  return S.settings.flyers.map(f => ({ ...f, used: used[f.id] || 0, remain: f.total ? f.total - (used[f.id] || 0) : null }));
+  return chipFlyers().map(f => ({ ...f, used: used[f.id] || 0, remain: f.total ? f.total - (used[f.id] || 0) : null }));
 }
 function renderLegend() {
   const n = filteredRecords().length;
@@ -592,6 +608,8 @@ function renderNotice() {
 /* ---------------- 範囲の描画（なぞる／点で囲む）＋つまみ調整 ---------------- */
 function startDrawing() {
   if ($('#fab').disabled) return;
+  if (!guardMode()) { S.drawPurpose = 'record'; return; }
+  setBarsLocked(true);
   S.infoWin.close(); closeSheet();
   const layer = $('#drawLayer'), cv = $('#drawCanvas');
   layer.hidden = false;
@@ -704,9 +722,9 @@ function finishStroke() {
   $('#drawHint').textContent = 'よければ「これで決定」（次の画面で角を調整できます）';
 }
 function cancelDrawing() {
-  clearTapShapes(); if (S.drawing?.mapClick) google.maps.event.removeListener(S.drawing.mapClick);
+  clearTapShapes(); setBarsLocked(false); if (S.drawing?.mapClick) google.maps.event.removeListener(S.drawing.mapClick);
   $('#drawLayer').hidden = true; $('#fab').hidden = false; S.drawing = null; setAddingUI(false);
-  $('#legendBtn').hidden = S.boardsOn || S.spotBarOn; $('#zoomBtns').hidden = false; $('#centerMark').hidden = false;
+  $('#legendBtn').hidden = barOn(); $('#zoomBtns').hidden = false; $('#centerMark').hidden = false; renderRecords();
 }
 function commitDrawing() {
   const d = S.drawing; if (!d) return;
@@ -728,7 +746,8 @@ function commitDrawing() {
 }
 // つまみで形を調整（Googleマップ標準の編集ハンドル）
 function startAdjust(ring, rec) {
-  S.infoWin.close(); closeSheet();
+  if (S.adjust) endAdjust(false);
+  S.infoWin.close(); closeSheet(); setBarsLocked(true);
   for (const p of S.polys.values()) p.setOptions({ clickable: false });
   const path = ring.slice(0, -1).map(([lng, lat]) => ({ lat, lng }));
   const poly = new google.maps.Polygon({ paths: path, editable: true, draggable: false, strokeColor: '#00e5ff', strokeWeight: 3, fillColor: '#00e5ff', fillOpacity: 0.25, map: S.map, zIndex: 10 });
@@ -746,8 +765,8 @@ function endAdjust(ok) {
     ring.push(ring[0]);
     try { if (turf.kinks(turf.polygon([ring])).features.length) { toast('線が交差しています。交差しない形に直してください'); return; } } catch { }
   }
-  a.poly.setMap(null); S.adjust = null;
-  $('#adjustBar').hidden = true; $('#fab').hidden = false; $('#legendBtn').hidden = S.boardsOn || S.spotBarOn;
+  a.poly.setMap(null); S.adjust = null; setBarsLocked(false);
+  $('#adjustBar').hidden = true; $('#fab').hidden = false; $('#legendBtn').hidden = barOn(); renderRecords();
   for (const p of S.polys.values()) p.setOptions({ clickable: true });
   if (!ok) { S.drawPurpose = 'record'; return; }
   if (!a.rec && S.drawPurpose === 'assign') { S.drawPurpose = 'record'; openAssignForm({ polygon: ring }); return; }
@@ -764,7 +783,8 @@ function endAdjust(ok) {
 }
 
 /* ---------------- ボトムシート ---------------- */
-function openSheet(html) { $('#sheetBody').innerHTML = html; $('#sheet').hidden = false; }
+function openSheet(html) { S.sheetGuard = null; $('#sheetBody').innerHTML = html; $('#sheet').hidden = false; }
+function userCloseSheet() { if (S.sheetGuard && !confirm(S.sheetGuard)) return; S.sheetGuard = null; closeSheet(); }
 function closeSheet() { $('#sheet').hidden = true; }
 
 function groupOf(rec) { return rec.group_id ? S.records.filter(x => x.group_id === rec.group_id) : (rec.id ? [S.records.find(x => x.id === rec.id) || rec] : []); }
@@ -778,7 +798,7 @@ function openRecordForm(rec) {
   const existing = isNew ? [] : groupOf(rec);
   const rows = existing.length ? existing.map(x => ({ id: x.id, flyer_id: x.flyer_id, count: x.count })) : [{ id: null, flyer_id: rec.flyer_id || flyers[0].id, count: rec.count ?? est.setai }];
   const base = existing[0] || rec;
-  const flyerRow = (row) => `<div class="rowItem flyerLine" data-id="${esc(row.id || uid())}"><select class="fFlyer">${flyers.map(f => `<option value="${f.id}" ${row.flyer_id === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select><input class="fCount" type="number" inputmode="numeric" min="0" value="${row.count}" placeholder="枚数"><button class="icon delLine" title="このチラシを外す">🗑</button></div>`;
+  const flyerRow = (row) => `<div class="rowItem flyerLine" data-id="${esc(row.id || uid())}"><select class="fFlyer">${flyers.map(f => `<option value="${esc(f.id)}" ${row.flyer_id === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select><input class="fCount" type="number" inputmode="numeric" min="0" value="${row.count}" placeholder="枚数"><button class="icon delLine" title="このチラシを外す">🗑</button></div>`;
   openSheet(`
     <h3>${isNew ? '配布を記録' : '記録を編集'}</h3>
     <div class="small">範囲 約${area.toLocaleString()}㎡ ／ 推定 <b>${est.setai}</b> 世帯 ／ ${esc(est.town)}</div>
@@ -797,6 +817,7 @@ function openRecordForm(rec) {
     const next = flyers.find(f => !used.includes(f.id)) || flyers[0];
     $('#flyerLines').insertAdjacentHTML('beforeend', flyerRow({ id: null, flyer_id: next.id, count: est.setai })); bindLines();
   };
+  S.sheetGuard = '入力中の内容（描いた範囲）が消えます。閉じますか？';
   const locked = isLocked();
   if (locked) { $('#addLine').hidden = true; const d = new Date(S.settings.noticeDate); d.setDate(d.getDate() - 1); $('#fDate').max = d.toISOString().slice(0, 10); }
   $('#fCancel').onclick = closeSheet;
@@ -882,7 +903,7 @@ function exportCsv(recs) {
 }
 
 function showTownTable(mode = 'has') {
-  const recs = filteredRecords();
+  const recs = mode === 'zero' ? S.records.filter(r => S.filter.flyers.has(r.flyer_id)) : filteredRecords();
   const fl = S.settings.flyers.filter(f => S.filter.flyers.has(f.id));
   const rows = [];
   for (const t of S.towns) {
@@ -899,7 +920,7 @@ function showTownTable(mode = 'has') {
   openSheet(`
     <h3>町丁目ごとの配布率</h3>
     <div class="stTabs"><button data-m="has" class="${mode === 'has' ? 'on' : ''}">記録あり</button><button data-m="zero" class="${mode === 'zero' ? 'on' : ''}">未配布（世帯数順）</button><button data-m="all" class="${mode === 'all' ? 'on' : ''}">すべて</button></div>
-    <div class="small">国勢調査（2020年）の世帯数に対する面積ベースの推定。${mode === 'zero' ? '世帯数が多い未配布の町丁目から並べています（次にどこを配るかの目安）' : ''}${rows.length > shown.length ? `　※上位${shown.length}件を表示` : ''}</div>
+    <div class="small">国勢調査（2020年）の世帯数に対する面積ベースの推定。${mode === 'zero' ? '世帯数が多い未配布の町丁目から並べています（期間に関係なく全記録で判定）' : `（${S.filter.period === 'all' ? '全期間' : '直近' + S.filter.period + '日'}の記録）`}${rows.length > shown.length ? `　※上位${shown.length}件を表示` : ''}</div>
     <div class="tableWrap"><table><thead><tr><th>町丁目</th><th>世帯</th>${fl.map(f => `<th><span style="color:${f.color}">●</span>${esc(f.name)}</th>`).join('')}</tr></thead><tbody>
     ${shown.map(({ t, covs }) => `<tr data-id="${t.id}"><td>${esc(t.city)} ${esc(t.name)}</td><td>${t.setai}</td>${covs.map(c => `<td><div>${Math.round(c * 100)}%</div><div class="bar"><i style="width:${Math.round(c * 100)}%"></i></div></td>`).join('')}</tr>`).join('') || '<tr><td colspan="9" class="small">該当なし</td></tr>'}
     </tbody></table></div>
@@ -911,7 +932,7 @@ function showTownTable(mode = 'has') {
 }
 
 function showSettings() {
-  const s = S.settings; const origMembers = [...s.members];
+  const s = { ...S.settings, flyers: S.settings.flyers.map(f => ({ ...f })) }; const origMembers = [...s.members];
   openSheet(`
     <h3>設定</h3>
     <h4 style="margin:12px 0 4px">チラシの種類</h4>
@@ -954,6 +975,7 @@ function showSettings() {
       s.members = [...new Set([...typed, ...fresh.members.filter(m => !removed.includes(m))])];
       await store.saveSettings(s);
     } catch { $('#sSave').disabled = false; return; }
+    S.settings = normalizeSettings(s);
     for (const f of flyers) S.filter.flyers.add(f.id);
     closeSheet(); renderAll(); applyRole(); toast('設定を保存しました');
   };
@@ -970,7 +992,8 @@ function showSettings() {
 /* ---------------- 赤ピンで位置を合わせる（拠点・掲示場の追加／位置修正） ---------------- */
 function startPinPlace(latLng, onDone, hint) {
   endPinPlace(false);
-  closeSheet(); S.infoWin.close();
+  if (S.drawing || S.adjust) { toast('先に「決定」か「中止」を押してください'); return; }
+  closeSheet(); S.infoWin.close(); setBarsLocked(true);
   const m = new google.maps.Marker({ position: latLng, map: S.map, draggable: true, zIndex: 60, animation: google.maps.Animation.DROP, crossOnDrag: false,
     icon: { path: 'M 0,0 C -2,-6 -14,-9 -14,-20 A 14,14 0 1,1 14,-20 C 14,-9 2,-6 0,0 Z', fillColor: '#e53935', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2, scale: 1.4, labelOrigin: new google.maps.Point(0, -20) }, label: { text: '●', color: '#fff', fontSize: '10px' } });
   S.pin = { marker: m, onDone };
@@ -980,8 +1003,8 @@ function startPinPlace(latLng, onDone, hint) {
 }
 function endPinPlace(ok) {
   const p = S.pin; if (!p) return;
-  const pos = p.marker.getPosition(); p.marker.setMap(null); S.pin = null;
-  $('#pinBar').hidden = true; $('#fab').hidden = false;
+  const pos = p.marker.getPosition(); p.marker.setMap(null); S.pin = null; setBarsLocked(false);
+  $('#pinBar').hidden = true; $('#fab').hidden = false; renderRecords();
   if (ok) p.onDone(pos);
 }
 
@@ -994,13 +1017,13 @@ const BOARD_STYLE = {
   damaged:  { color: '#ef4444', label: '異', name: '異常（破損・剥がれ）' },
   check:    { color: '#f2a93b', label: '？', name: '要確認' },
 };
-const BOARD_ST_LABEL = k => BOARD_STYLE[k]?.name || k;
+const BOARD_ST_LABEL = k => BOARD_STYLE[k]?.name || '不明';
 const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: '掲示場' }, general: { name: '一般ポスター（支援者宅・店舗など）', short: '一般' }, political: { name: '政治活動用ポスター（二連・演説会告知）', short: '二連' } };
 function politicalColor(b) { if (!b.posted_at) return '#9aa7b4'; const d = (new Date(today()) - new Date(b.posted_at)) / 86400000; return d < 90 ? '#3fb950' : d < 180 ? '#facc15' : '#ef4444'; }
 function posterBanDate() { const t = S.settings?.termEndDate; if (!t) return null; const d = new Date(t); d.setMonth(d.getMonth() - 6); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); }
 // 看板の形のアイコン（SVG）。絵が主役：掲示板にポスターが貼られた図。色＝状態、番号は下に小さく
 function boardIcon(kind, color, text, status) {
-  const t = String(text || '').slice(0, 4);
+  const t = esc(String(text || '').slice(0, 4));
   const mark = status === 'done' ? '✓' : status === 'damaged' ? '!' : status === 'check' ? '?' : status === 'working' ? '…' : status === 'reserved' ? '予' : '';
   const badge = mark ? `<circle cx='40' cy='8' r='8' fill='#fff' stroke='${color}' stroke-width='2'/><text x='40' y='11.5' font-size='10' font-weight='700' text-anchor='middle' fill='${color}' font-family='sans-serif'>${mark}</text>` : '';
   const board = kind === 'general'
@@ -1029,6 +1052,7 @@ function toggleBoards(on) {
   renderBoards(); renderSpots();
 }
 function setBoardAdding(on) {
+  if (on && !guardMode()) return;
   S.boardAdding = on; if (on) S.spotAdding = false;
   $('#boardAddHint').hidden = !on;
   setAddingUI(on);
@@ -1048,11 +1072,11 @@ function renderBoards() {
     const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
     const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : st.color;
     const m = new google.maps.Marker({
-      position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20,
+      position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20, clickable: overlaysClickable(),
       icon: boardIcon(kind, color, b.no, b.status),
       title: `${b.no ? b.no + ' ' : ''}${b.place || ''}（${BOARD_ST_LABEL(b.status)}）`,
     });
-    m.addListener('click', () => { if (!S.boardAdding) showBoard(b); });
+    m.addListener('click', () => { if (overlaysClickable()) showBoard(b); });
     S.boardMarkers.set(b.id, m);
   }
 }
@@ -1182,6 +1206,7 @@ function toggleSpotBar(on) {
   renderSpots(); renderStations();
 }
 function setSpotAdding(on) {
+  if (on && !guardMode()) return;
   S.spotAdding = on; if (on) S.boardAdding = false;
   $('#spotAddHint').hidden = !on;
   setAddingUI(on);
@@ -1199,15 +1224,15 @@ function renderSpots() {
     const k = SPOT_KIND[sp.kind] || SPOT_KIND.other;
     const next = upcoming(spotEvents(sp.id))[0];
     const m = new google.maps.Marker({
-      position: { lat: sp.lat, lng: sp.lng }, map: S.map, zIndex: 30,
+      position: { lat: sp.lat, lng: sp.lng }, map: S.map, zIndex: 30, clickable: overlaysClickable(),
       icon: { path: 'M 0,0 C -2,-6 -12,-8 -12,-17 A 12,12 0 1,1 12,-17 C 12,-8 2,-6 0,0 Z', fillColor: k.color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2, scale: 1.25, labelOrigin: new google.maps.Point(0, -17) },
       label: { text: k.emoji, fontSize: '15px' },
       title: `${sp.name}${next ? `　次回 ${fmtDate(next.date)} ${next.time}` : ''}`,
     });
-    m.addListener('click', () => { if (!S.spotAdding && !S.boardAdding) showSpot(sp); });
+    m.addListener('click', () => { if (overlaysClickable()) showSpot(sp); });
     S.spotMarkers.set(sp.id, m);
     if (showLabels) {
-      const evs = spotEvents(sp.id); const done = history(evs).length;
+      const evs = spotEvents(sp.id); const done = evs.filter(e => e.done).length;
       const line2 = next ? `次 <b>${fmtDate(next.date)}</b>${next.time ? ' ' + esc(next.time) : ''}${next.member ? ' ' + esc(next.member) : ''}` : (done ? `予定なし ／ 実施${done}回` : '予定なし');
       const lb = new RecLabel({ lat: sp.lat, lng: sp.lng }, `${k.emoji} <b>${esc(sp.name)}</b><br>${line2}`, k.color, { dy: -48, cls: 'recLabel spotLabel' });
       lb.setMap(S.map); S.spotLabels.push(lb);
@@ -1441,21 +1466,21 @@ function renderAssignments() {
     if (vb && !bboxHit(turf.bbox(turf.polygon([a.polygon])), vb)) continue;
     const isMine = a.member === S.user;
     const col = isMine ? '#ffd60a' : '#cbd5e1';
-    const poly = new google.maps.Polygon({ paths: a.polygon.map(([lng, lat]) => ({ lat, lng })), strokeColor: col, strokeOpacity: 1, strokeWeight: 3, fillColor: col, fillOpacity: isMine ? 0.18 : 0.08, map: S.map, zIndex: 1, icons: undefined });
+    const poly = new google.maps.Polygon({ paths: a.polygon.map(([lng, lat]) => ({ lat, lng })), strokeColor: col, strokeOpacity: 1, strokeWeight: 3, fillColor: col, fillOpacity: isMine ? 0.18 : 0.08, map: S.map, zIndex: 1, clickable: overlaysClickable() });
     poly.addListener('click', ev => { if (!S.drawing && !S.pin) showAssignment(a); });
     S.asgPolys.set(a.id, poly);
     if (showLabels) {
       const c = turf.centerOfMass(turf.polygon([a.polygon])).geometry.coordinates;
       const f = a.flyer_id ? flyerOf(a.flyer_id) : null;
       const html = `📋 <b>${esc(a.member || '担当未定')}</b>${a.due ? ` 〜${fmtDate(a.due)}` : ''}<br>${f ? esc(f.name) : 'チラシ未定'}${a.est_setai ? ` 約${a.est_setai}世帯` : ''}`;
-      const lb = new RecLabel({ lat: c[1], lng: c[0] }, html, col); lb.setMap(S.map); lb.getDivClass = 'asgLabel';
+      const lb = new RecLabel({ lat: c[1], lng: c[0] }, html, null, { cls: 'asgLabel' + (isMine ? '' : ' other') }); lb.setMap(S.map);
       S.asgLabels.push(lb);
-      setTimeout(() => { if (lb.div) { lb.div.className = 'asgLabel' + (isMine ? '' : ' other'); lb.div.style.borderColor = ''; } }, 0);
     }
   }
 }
 function startAssignDraw() {
   if ($('#fab').disabled) { toast('告示日を過ぎているため作成できません'); return; }
+  if (!guardMode()) return;
   S.drawPurpose = 'assign'; startDrawing();
   setTimeout(() => { const h = $('#drawHint'); if (h && S.drawing) h.textContent = '割り当てる範囲を囲んでください（' + h.textContent + '）'; }, 0);
 }
@@ -1471,9 +1496,11 @@ function openAssignForm(a) {
     <label>メモ（任意）<input id="aNote" type="text" value="${esc(a.note || '')}" placeholder="例：団地は管理人に一声かけてから"></label>
     <div class="btnRow"><button class="ghost" id="aCancel">やめる</button><button class="primary" id="aSave">保存する</button></div>
   `);
+  S.sheetGuard = '入力中の内容（描いた範囲）が消えます。閉じますか？';
   $('#aCancel').onclick = closeSheet;
+  const aId = a.id || uid();
   $('#aSave').onclick = async () => {
-    const na = { ...a, id: a.id || uid(), member: $('#aMember').value || null, flyer_id: $('#aFlyer').value || null, due: $('#aDue').value || null, note: $('#aNote').value.trim(), status: a.status || 'planned', est_setai: est.setai, town: est.town, created_by: a.created_by || S.user };
+    const na = { ...a, id: aId, member: $('#aMember').value || null, flyer_id: $('#aFlyer').value || null, due: $('#aDue').value || null, note: $('#aNote').value.trim(), status: a.status || 'planned', est_setai: est.setai, town: est.town, created_by: a.created_by || S.user };
     $('#aSave').disabled = true;
     try { await store.saveAssignment(na); } catch { $('#aSave').disabled = false; return; }
     S.assignments = await store.loadAssignments(); closeSheet(); renderAssignments(); toast('割り当てを保存しました');
@@ -1519,9 +1546,9 @@ function renderStations() {
   for (const st of S.stations) {
     // 既に拠点として登録済みの駅（150m以内・名前一致）は出さない
     if (S.spots.some(sp => sp.name.includes(st.name) && Math.hypot((sp.lat - st.lat) * 111000, (sp.lng - st.lng) * 91000) < 150)) continue;
-    const m = new google.maps.Marker({ position: { lat: st.lat, lng: st.lng }, map: S.map, zIndex: 25,
+    const m = new google.maps.Marker({ position: { lat: st.lat, lng: st.lng }, map: S.map, zIndex: 25, clickable: overlaysClickable(),
       icon: { path: google.maps.SymbolPath.CIRCLE, scale: 12, fillColor: '#fff', fillOpacity: 0.95, strokeColor: '#1d4ed8', strokeWeight: 2 }, label: { text: '🚉', fontSize: '14px' }, title: `${st.name}駅（${st.city}）` });
-    m.addListener('click', () => { if (S.spotAdding || S.pin) return; openSheet(`
+    m.addListener('click', () => { if (!overlaysClickable()) return; openSheet(`
       <h3>🚉 ${esc(st.name)}駅</h3><div class="small">${esc(st.city)}${st.operator ? ' ／ ' + esc(st.operator) : ''}</div>
       <div class="btnRow"><button class="primary" id="stAdd">🎤 ここを辻立ち拠点に登録</button><button class="ghost" id="stClose">閉じる</button></div>`);
       $('#stClose').onclick = closeSheet;
@@ -1576,7 +1603,8 @@ function openBoardImport() {
         try { const d = await fetch('https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(q)).then(r => r.json()); hit = (d || []).find(f => inAichi(f.geometry.coordinates[1], f.geometry.coordinates[0]) && !/^愛知県(海部郡)?[^市町村]{1,6}[市町村]$/.test(f.properties.title || '')); } catch { }
         if (hit) break;
       }
-      res.push({ no, text, hit: hit ? { lat: hit.geometry.coordinates[1], lng: hit.geometry.coordinates[0], title: hit.properties.title } : null });
+      if (!box.isConnected) return;
+      res.push({ id: uid(), no, text, hit: hit ? { lat: hit.geometry.coordinates[1], lng: hit.geometry.coordinates[0], title: hit.properties.title } : null });
       await new Promise(r => setTimeout(r, 250));
     }
     const ok = res.filter(r => r.hit).length;
@@ -1586,8 +1614,11 @@ function openBoardImport() {
     $('#imCopyNg').onclick = () => copyText(res.filter(r => !r.hit).map(r => `${r.no}\t${r.text}`).join('\n') || '（すべて見つかりました）');
     $('#imSave').onclick = async () => {
       $('#imSave').disabled = true;
-      try { for (const r of res) if (r.hit) await store.saveBoard({ id: uid(), kind, no: r.no, place: r.text, lat: +r.hit.lat.toFixed(6), lng: +r.hit.lng.toFixed(6), status: 'todo', memo: '一覧から取り込み（位置は要確認）' }); } catch { return; }
-      S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast(`${ok}件を取り込みました。ピンの位置がずれていれば「位置を直す」で調整してください`, 4000);
+      const dup = new Set(S.boards.filter(b => (b.kind || 'official') === kind).map(b => String(b.no)));
+      const targets = res.filter(r => r.hit && !dup.has(String(r.no)));
+      try { for (const r of targets) await store.saveBoard({ id: r.id, kind, no: r.no, place: r.text, lat: +r.hit.lat.toFixed(6), lng: +r.hit.lng.toFixed(6), status: 'todo', memo: '一覧から取り込み（位置は要確認）' }); }
+      catch { $('#imSave').disabled = false; toast('途中で失敗しました。もう一度「取り込む」を押してください（重複はしません）', 5000); return; }
+      S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast(`${targets.length}件を取り込みました。位置がずれていれば「位置を直す」で調整してください`, 5000);
     };
   };
 }
@@ -1645,7 +1676,7 @@ async function weatherForJma(date, timeText) {
 }
 // 日付＋時間帯（例 "7:00〜8:00"）に対応する予報を1行にまとめる。日本は気象庁を優先、なければGoogle
 async function weatherFor(lat, lng, date, timeText) {
-  const jm = await weatherForJma(date, timeText); if (jm) return jm;
+  try { const jm = await weatherForJma(date, timeText); if (jm) return jm; } catch { }
   const hours = await weatherHours(lat, lng); if (!hours || !hours.length) return null;
   const m = String(timeText || '').match(/(\d{1,2})(?::(\d{2}))?/); const startH = m ? +m[1] : 9;
   const m2 = String(timeText || '').match(/[〜~\-ー](\d{1,2})/); const endH = m2 ? Math.max(startH + 1, +m2[1]) : startH + 1;
@@ -1788,7 +1819,7 @@ function bindUI() {
   $('#modeTap').onclick = () => setDrawMode('tap');
   $('#btnAdjustCancel').onclick = () => endAdjust(false);
   $('#btnAdjustOk').onclick = () => endAdjust(true);
-  $('#btnMenu').onclick = () => { $('#menu').hidden = false; $('#menuUser').textContent = `👤 ${S.user || ''}`; };
+  $('#btnMenu').onclick = () => { $('#menu').hidden = false; applyRole(); };
   $('#btnMenuClose').onclick = () => $('#menu').hidden = true;
   document.querySelectorAll('.menuItem[data-view]').forEach(b => b.onclick = () => {
     $('#menu').hidden = true;
@@ -1816,15 +1847,15 @@ function bindUI() {
   $('#btnPinCancel').onclick = () => endPinPlace(false);
   $('#btnPinOk').onclick = () => endPinPlace(true);
   $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; let saved = null; try { saved = JSON.parse(localStorage.getItem('cm_user') || 'null'); } catch { } localStorage.removeItem('cm_user'); showLogin(null, USE_SUPABASE && saved?.pass ? { verified: true, pass: saved.pass } : {}); };
-  $('#sheetHandle').onclick = closeSheet;
+  $('#sheetHandle').onclick = userCloseSheet;
   (() => {
     const sheet = $('#sheet'), body = $('#sheetBody'); let sy = null, sx = null, dragging = false, moved = 0;
     sheet.addEventListener('touchstart', e => { const t = e.touches[0]; sy = t.clientY; sx = t.clientX; moved = 0; dragging = (body.scrollTop <= 0); }, { passive: true });
     sheet.addEventListener('touchmove', e => {
       if (!dragging || sy == null) return; const t = e.touches[0]; const dy = t.clientY - sy, dx = Math.abs(t.clientX - sx);
-      if (dy > 0 && dy > dx) { moved = dy; sheet.style.transform = `translateY(${Math.min(dy, 400)}px)`; sheet.style.transition = 'none'; if (e.cancelable) e.preventDefault(); }
+      if (dy > 0 && dy > dx) { moved = dy; sheet.style.transform = `translateY(${Math.min(dy, 400)}px)`; sheet.style.transition = 'none'; if (e.cancelable) e.preventDefault(); } else if (dy <= 0) { moved = 0; sheet.style.transform = ''; }
     }, { passive: false });
-    const end = () => { if (sy == null) return; sheet.style.transition = ''; if (moved > 90) closeSheet(); sheet.style.transform = ''; sy = null; moved = 0; dragging = false; };
+    const end = () => { if (sy == null) return; sheet.style.transition = ''; const m = moved; sheet.style.transform = ''; sy = null; moved = 0; dragging = false; if (m > 90) userCloseSheet(); };
     sheet.addEventListener('touchend', end); sheet.addEventListener('touchcancel', end);
   })();
   $('#legendBtn').onclick = () => setLegend(!S.legendOpen);
