@@ -41,6 +41,17 @@ h1,h2,h3{margin:0 0 8px}
 .adminChips .chip{padding:3px 8px;font-size:11px;gap:4px}
 .adminChips .chip .dot{width:8px;height:8px}
 .adminChips .chip:not(.on){opacity:.55}
+.adminChips .chip .caret{font-size:9px;opacity:.8;margin-left:1px}
+.adminChips .chip .sub{font-size:9px;background:rgba(0,0,0,.35);border-radius:6px;padding:0 4px;margin-left:3px}
+#chipMenu{position:fixed;z-index:60;width:250px;background:#111;color:#eee;border:1px solid #333;border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.5);font-size:13px}
+#chipMenu .cmHead{display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:14px}
+#chipMenu .cmHead .dot{width:10px;height:10px;border-radius:50%}
+#chipMenu .cmRow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid #222;cursor:pointer}
+#chipMenu .sw{appearance:none;-webkit-appearance:none;width:42px;height:24px;border-radius:12px;background:#444;position:relative;flex:none;margin:0}
+#chipMenu .sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
+#chipMenu .sw:checked{background:var(--orange)}
+#chipMenu .sw:checked::after{left:21px}
+#chipMenu .small{color:#888;font-size:11px;margin-top:4px}
 .adminChips .chip.on{background:var(--c);border-color:#111;color:#fff;text-shadow:0 0 2px rgba(0,0,0,.6)}
 
 #searchBox{position:relative;z-index:8;background:var(--panel);border-bottom:1px solid var(--border);padding:8px}

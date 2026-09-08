@@ -382,18 +382,16 @@ function adminOnSet() { try { const a = JSON.parse(localStorage.getItem('cm_admi
 function adminOrder() { const all = Object.keys(ADMIN_COLORS); try { const o = JSON.parse(localStorage.getItem('cm_admin_order') || 'null'); if (Array.isArray(o)) return [...o.filter(n => all.includes(n)), ...all.filter(n => !o.includes(n))]; } catch { } return all; }
 function renderAdminChips() {
   const el = $('#adminChips'); if (!el) return; const on = adminOnSet();
-  el.innerHTML = `<button class="chip ${oazaOn() ? 'on' : ''}" data-n="__oaza" style="--c:${OAZA_COLOR}" title="地名（丁目なし）の枠と名前をON/OFF"><span class="dot"></span>地名</button>` +
-    `<button class="chip ${on.size === Object.keys(ADMIN_COLORS).length ? 'on' : ''}" data-n="__all" style="--c:#555" title="全部の境界線をON/OFF"><span class="dot" style="background:#ddd"></span>境界線</button>` +
-    adminOrder().map(n => { const c = ADMIN_COLORS[n]; return `<button class="chip ${on.has(n) ? 'on' : ''}" data-n="${esc(n)}" style="--c:${c}" draggable="true" title="長押し／ドラッグで並べ替え"><span class="dot"></span>${esc(n.replace(/(市|町|村)$/, ''))}</button>`; }).join('');
+  const oz = oazaCitySet();
+  el.innerHTML = `<button class="chip ${on.size === Object.keys(ADMIN_COLORS).length ? 'on' : ''}" data-n="__all" style="--c:#555" title="全部の境界線をON/OFF"><span class="dot" style="background:#ddd"></span>境界線</button>` +
+    adminOrder().map(n => { const c = ADMIN_COLORS[n]; return `<button class="chip ${on.has(n) ? 'on' : ''}" data-n="${esc(n)}" style="--c:${c}" draggable="true" title="タップで境界線・地名の表示を選ぶ／ドラッグで並べ替え"><span class="dot"></span>${esc(n.replace(/(市|町|村)$/, ''))}${oz.has(n) ? '<span class="sub">地名</span>' : ''}<span class="caret">▾</span></button>`; }).join('');
   el.querySelectorAll('.chip').forEach(b => {
     b.onclick = () => {
       const cur = adminOnSet(); const n = b.dataset.n;
-      if (n === '__oaza') { localStorage.setItem('cm_oaza_on', oazaOn() ? '0' : '1'); renderAdminChips(); styleOaza(); renderOazaLabels(); return; }
-      if (n === '__all') { const all = Object.keys(ADMIN_COLORS); if (cur.size === all.length) cur.clear(); else all.forEach(x => cur.add(x)); }
-      else if (cur.has(n)) cur.delete(n); else cur.add(n);
-      localStorage.setItem('cm_admin_on', JSON.stringify([...cur])); renderAdminChips(); styleAdmin();
+      if (n === '__all') { const all = Object.keys(ADMIN_COLORS); if (cur.size === all.length) cur.clear(); else all.forEach(x => cur.add(x)); localStorage.setItem('cm_admin_on', JSON.stringify([...cur])); renderAdminChips(); styleAdmin(); return; }
+      openChipMenu(n, b);
     };
-    if (b.dataset.n === '__all' || b.dataset.n === '__oaza') return;
+    if (b.dataset.n === '__all') return;
     b.ondragstart = e => { e.dataTransfer.setData('text/plain', b.dataset.n); e.dataTransfer.effectAllowed = 'move'; b.classList.add('dragging'); };
     b.ondragend = () => b.classList.remove('dragging');
     b.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; b.classList.add('dragOver'); };
@@ -408,6 +406,26 @@ function renderAdminChips() {
 }
 // 隣接する境界で「どちらの色を上に描くか」（数字が大きいほど上）。津島は愛西に囲まれて見えにくいので最優先
 const ADMIN_Z = { '津島市': 6, '蟹江町': 5, '大治町': 4 };
+// 市町村チップのメニュー：境界線と地名（丁目なし）を市町村ごとにON/OFF
+function openChipMenu(n, chip) {
+  closeChipMenu();
+  const on = adminOnSet().has(n), oz = oazaCitySet().has(n);
+  const m = document.createElement('div'); m.id = 'chipMenu';
+  m.innerHTML = `<div class="cmHead"><span class="dot" style="background:${ADMIN_COLORS[n]}"></span><b>${esc(n)}</b></div>
+    <label class="cmRow"><span>境界線（市町村の外周）</span><input type="checkbox" class="sw" data-k="admin" ${on ? 'checked' : ''}></label>
+    <label class="cmRow"><span>地名（丁目なし）の枠と名前</span><input type="checkbox" class="sw" data-k="oaza" ${oz ? 'checked' : ''}></label>
+    <div class="small">この端末だけの設定です</div>`;
+  document.getElementById('app').appendChild(m);
+  const r = chip.getBoundingClientRect(); const w = 250;
+  m.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) + 'px'; m.style.top = (r.bottom + 6) + 'px';
+  m.querySelectorAll('input').forEach(i => i.onchange = () => {
+    if (i.dataset.k === 'admin') { const cur = adminOnSet(); if (i.checked) cur.add(n); else cur.delete(n); localStorage.setItem('cm_admin_on', JSON.stringify([...cur])); styleAdmin(); }
+    else { const cur = oazaCitySet(); if (i.checked) cur.add(n); else cur.delete(n); localStorage.setItem('cm_oaza_cities', JSON.stringify([...cur])); styleOaza(); renderOazaLabels(); }
+    renderAdminChips();
+  });
+  setTimeout(() => { document.addEventListener('pointerdown', S._cmOut = e => { if (!m.contains(e.target)) closeChipMenu(); }, { capture: true }); }, 0);
+}
+function closeChipMenu() { document.getElementById('chipMenu')?.remove(); if (S._cmOut) { document.removeEventListener('pointerdown', S._cmOut, { capture: true }); S._cmOut = null; } }
 async function loadAdminLayer() {
   try {
     const gj = await fetch('data/admin_aichi.geojson').then(r => r.json());
@@ -429,9 +447,12 @@ function styleAdmin() {
 /* ---------------- 地名（丁目なしの大字・町名） ---------------- */
 // 町丁目を「学戸一〜七丁目→学戸」のようにまとめた枠。data/oaza/ は tools/build_oaza.mjs で生成
 const OAZA_BASE = DATA_BASE.replace('by_city', 'oaza');
-const OAZA_COLOR = '#ffe270';
-const OAZA_BLACK = new Set(['蟹江町']);   // 地名の線を黒で描く市町村（まず蟹江町で試す）
-const oazaOn = () => localStorage.getItem('cm_oaza_on') !== '0';
+const OAZA_COLOR = '#ffe270';   // 色の指定がない市町村用
+// 地名を表示する市町村（端末ごと）。初期は蟹江町だけ
+function oazaCitySet() { try { const a = JSON.parse(localStorage.getItem('cm_oaza_cities') || 'null'); return new Set(Array.isArray(a) ? a : ['蟹江町']); } catch { return new Set(['蟹江町']); } }
+// 市町村の色を濃くした線色（蟹江のオレンジ→濃いオレンジ）
+const darken = (hex, f = 0.72) => '#' + [1, 3, 5].map(i => Math.round(parseInt(hex.slice(i, i + 2), 16) * f).toString(16).padStart(2, '0')).join('');
+const oazaColor = city => ADMIN_COLORS[city] ? darken(ADMIN_COLORS[city]) : OAZA_COLOR;
 async function loadOaza() {
   if (!S.map) return;
   try {
@@ -452,18 +473,18 @@ async function loadOaza() {
 }
 function styleOaza() {
   if (!S.oazaLayer || !S.map) return;
-  const z = S.map.getZoom(); const on = oazaOn();
-  // 試行：蟹江町は黒線（本人判断待ち）。ほかの市町村は淡い黄色のまま
-  S.oazaLayer.setStyle(f => { const c = OAZA_BLACK.has(f.getProperty('city')) ? '#111' : OAZA_COLOR;
-    return { visible: on && z >= 12.5, clickable: false, fillOpacity: 0, strokeColor: c, strokeOpacity: 0.9, strokeWeight: z >= 16 ? 2.5 : z >= 14 ? 2 : 1.5, zIndex: 2 }; });
+  const z = S.map.getZoom(); const on = oazaCitySet();
+  S.oazaLayer.setStyle(f => { const city = f.getProperty('city');
+    return { visible: on.has(city) && z >= 12.5, clickable: false, fillOpacity: 0, strokeColor: oazaColor(city), strokeOpacity: 0.95, strokeWeight: z >= 16 ? 2.5 : z >= 14 ? 2 : 1.5, zIndex: 2 }; });
 }
 // 地名ラベル：表示範囲内だけ描く。タップで地名全体の配布率
 function renderOazaLabels() {
   for (const l of S.oazaLabels) l.setMap(null); S.oazaLabels = [];
-  if (!S.map || !oazaOn() || S.map.getZoom() < 13.5) return;
+  const on = oazaCitySet();
+  if (!S.map || !on.size || S.map.getZoom() < 13.5) return;
   ensureLabelClass(); const vb = viewBbox(0.15); if (!vb) return;
   for (const o of S.oaza) {
-    if (!bboxHit(vb, o.bbox)) continue;
+    if (!on.has(o.city) || !bboxHit(vb, o.bbox)) continue;
     const lb = new RecLabel(o.lab, esc(o.name), null, { cls: 'oazaLabel' });
     lb.onClick = () => showOazaInfo(o);
     lb.setMap(S.map); S.oazaLabels.push(lb);
@@ -728,7 +749,7 @@ function flyerTotals() {
 function renderLegend() {
   const n = filteredRecords().length;
   const stock = flyerTotals().filter(f => S.filter.flyers.has(f.id)).map(f => `<div class="lg"><span class="sw" style="background:${f.color};border-color:${f.color}"></span><span>${esc(f.name)} ${f.used.toLocaleString()}${f.total ? ` / ${f.total.toLocaleString()}枚　<b style="color:${f.remain < 0 ? '#ff7b72' : '#e8eef5'}">残り ${f.remain.toLocaleString()}</b>` : '枚'}</span></div>`).join('');
-  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="lg"><span class="sw" style="border-color:${OAZA_COLOR};background:none"></span>地名・丁目なし（名前タップで配布率）</div><div class="lg" style="flex-wrap:wrap;gap:4px 8px">${Object.entries(ADMIN_COLORS).map(([n, c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span class="sw" style="border-color:${c};background:none;width:12px;height:8px"></span>${n}</span>`).join('')}</div><div class="small">表示中 ${n}件</div>`;
+  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="lg"><span class="sw" style="border-color:${oazaColor('蟹江町')};background:none"></span>地名・丁目なし＝市町村の色の濃い線（市町村チップから表示／名前タップで配布率）</div><div class="lg" style="flex-wrap:wrap;gap:4px 8px">${Object.entries(ADMIN_COLORS).map(([n, c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span class="sw" style="border-color:${c};background:none;width:12px;height:8px"></span>${n}</span>`).join('')}</div><div class="small">表示中 ${n}件</div>`;
 }
 function renderNotice() {
   const b = $('#noticeBanner'); const nd = S.settings.noticeDate;
