@@ -374,15 +374,30 @@ const ADMIN_COLORS = {
 };
 // 表示ON/OFF（端末ごとに記憶）
 function adminOnSet() { try { const a = JSON.parse(localStorage.getItem('cm_admin_on') || 'null'); return new Set(Array.isArray(a) ? a : Object.keys(ADMIN_COLORS)); } catch { return new Set(Object.keys(ADMIN_COLORS)); } }
+// 並び順（端末ごと。他の人には影響しない）
+function adminOrder() { const all = Object.keys(ADMIN_COLORS); try { const o = JSON.parse(localStorage.getItem('cm_admin_order') || 'null'); if (Array.isArray(o)) return [...o.filter(n => all.includes(n)), ...all.filter(n => !o.includes(n))]; } catch { } return all; }
 function renderAdminChips() {
   const el = $('#adminChips'); if (!el) return; const on = adminOnSet();
   el.innerHTML = `<button class="chip ${on.size === Object.keys(ADMIN_COLORS).length ? 'on' : ''}" data-n="__all" style="--c:#555" title="全部の境界線をON/OFF"><span class="dot" style="background:#ddd"></span>境界線</button>` +
-    Object.entries(ADMIN_COLORS).map(([n, c]) => `<button class="chip ${on.has(n) ? 'on' : ''}" data-n="${esc(n)}" style="--c:${c}"><span class="dot"></span>${esc(n.replace(/(市|町|村)$/, ''))}</button>`).join('');
-  el.querySelectorAll('.chip').forEach(b => b.onclick = () => {
-    const cur = adminOnSet(); const n = b.dataset.n;
-    if (n === '__all') { const all = Object.keys(ADMIN_COLORS); if (cur.size === all.length) cur.clear(); else all.forEach(x => cur.add(x)); }
-    else if (cur.has(n)) cur.delete(n); else cur.add(n);
-    localStorage.setItem('cm_admin_on', JSON.stringify([...cur])); renderAdminChips(); styleAdmin();
+    adminOrder().map(n => { const c = ADMIN_COLORS[n]; return `<button class="chip ${on.has(n) ? 'on' : ''}" data-n="${esc(n)}" style="--c:${c}" draggable="true" title="長押し／ドラッグで並べ替え"><span class="dot"></span>${esc(n.replace(/(市|町|村)$/, ''))}</button>`; }).join('');
+  el.querySelectorAll('.chip').forEach(b => {
+    b.onclick = () => {
+      const cur = adminOnSet(); const n = b.dataset.n;
+      if (n === '__all') { const all = Object.keys(ADMIN_COLORS); if (cur.size === all.length) cur.clear(); else all.forEach(x => cur.add(x)); }
+      else if (cur.has(n)) cur.delete(n); else cur.add(n);
+      localStorage.setItem('cm_admin_on', JSON.stringify([...cur])); renderAdminChips(); styleAdmin();
+    };
+    if (b.dataset.n === '__all') return;
+    b.ondragstart = e => { e.dataTransfer.setData('text/plain', b.dataset.n); e.dataTransfer.effectAllowed = 'move'; b.classList.add('dragging'); };
+    b.ondragend = () => b.classList.remove('dragging');
+    b.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; b.classList.add('dragOver'); };
+    b.ondragleave = () => b.classList.remove('dragOver');
+    b.ondrop = e => {
+      e.preventDefault(); b.classList.remove('dragOver');
+      const from = e.dataTransfer.getData('text/plain'), to = b.dataset.n; if (!from || from === to || !ADMIN_COLORS[from]) return;
+      const arr = adminOrder(); const fi = arr.indexOf(from), ti = arr.indexOf(to); const [m] = arr.splice(fi, 1); arr.splice(ti, 0, m);
+      localStorage.setItem('cm_admin_order', JSON.stringify(arr)); renderAdminChips(); toast('並び順を変えました（この端末だけ）');
+    };
   });
 }
 async function loadAdminLayer() {
