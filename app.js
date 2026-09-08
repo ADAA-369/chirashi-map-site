@@ -185,6 +185,10 @@ function toast(msg, ms = 2200) { const t = $('#toast'); t.textContent = msg; t.h
 
 /* ---------------- 起動 ---------------- */
 window.addEventListener('DOMContentLoaded', init);
+// 圏外対策（Service Worker）とオンライン状態の表示
+if ('serviceWorker' in navigator && location.protocol === 'https:') { window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(e => console.warn('sw', e))); }
+window.addEventListener('offline', () => toast('圏外です。閲覧はできますが、保存は電波が戻ってから', 5000));
+window.addEventListener('online', () => toast('通信が戻りました', 2000));
 document.addEventListener('gesturestart', e => e.preventDefault(), { passive: false });
 document.addEventListener('gesturechange', e => e.preventDefault(), { passive: false });
 
