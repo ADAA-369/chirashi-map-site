@@ -360,20 +360,33 @@ async function initMap() {
 }
 
 /* ---------------- 市区町村の境界（愛知県・国土数値情報 N03） ---------------- */
+// 表示する市区町村と色（本人指定。ここにない市町村は線を出さない）
+const ADMIN_COLORS = {
+  '蟹江町': '#e65100',  // 濃いオレンジ
+  'あま市': '#0277bd',  // 濃い水色
+  '一宮市': '#c62828',  // 赤
+  '稲沢市': '#1b5e20',  // 濃い緑
+  '愛西市': '#6a1b9a',  // 濃い紫
+  '弥富市': '#ad1457',  // 濃いピンク（ワイン）
+  '飛島村': '#00695c',  // 濃い青緑
+  '津島市': '#283593',  // 濃い紺
+  '大治町': '#795548',  // 濃い茶
+};
 async function loadAdminLayer() {
   try {
     const gj = await fetch('data/admin_aichi.geojson').then(r => r.json());
+    gj.features = gj.features.filter(f => ADMIN_COLORS[f.properties.name]);
     const { Data } = await google.maps.importLibrary('maps');
     S.adminLayer = new Data({ map: S.map });
     S.adminLayer.addGeoJson(gj);
-    styleAdmin();
+    styleAdmin(); renderLegend();
   } catch (e) { console.warn('admin layer', e); }
 }
 function styleAdmin() {
   if (!S.adminLayer) return;
   const z = S.map.getZoom();
-  // 引いた時は太く目立たせ、寄った時は細く。町丁目の白線と区別するため黄色
-  S.adminLayer.setStyle({ clickable: false, fillOpacity: 0, strokeColor: '#ffd60a', strokeOpacity: z >= 14 ? 0.85 : 0.95, strokeWeight: z >= 15 ? 2.5 : z >= 12 ? 3 : 2, zIndex: 3 });
+  S.adminLayer.setStyle(f => { const c = ADMIN_COLORS[f.getProperty('name')] || '#ffd60a';
+    return { clickable: false, fillColor: c, fillOpacity: z >= 13 ? 0 : 0.08, strokeColor: c, strokeOpacity: 0.95, strokeWeight: z >= 15 ? 3 : z >= 12 ? 3.5 : 2.5, zIndex: 3 }; });
 }
 
 /* ---------------- 町丁目 ---------------- */
@@ -619,7 +632,7 @@ function flyerTotals() {
 function renderLegend() {
   const n = filteredRecords().length;
   const stock = flyerTotals().filter(f => S.filter.flyers.has(f.id)).map(f => `<div class="lg"><span class="sw" style="background:${f.color};border-color:${f.color}"></span><span>${esc(f.name)} ${f.used.toLocaleString()}${f.total ? ` / ${f.total.toLocaleString()}枚　<b style="color:${f.remain < 0 ? '#ff7b72' : '#e8eef5'}">残り ${f.remain.toLocaleString()}</b>` : '枚'}</span></div>`).join('');
-  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="lg"><span class="sw" style="border-color:#ffd60a;background:none"></span>市区町村の境界</div><div class="small">表示中 ${n}件</div>`;
+  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="lg" style="flex-wrap:wrap;gap:4px 8px">${Object.entries(ADMIN_COLORS).map(([n, c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span class="sw" style="border-color:${c};background:none;width:12px;height:8px"></span>${n}</span>`).join('')}</div><div class="small">表示中 ${n}件</div>`;
 }
 function renderNotice() {
   const b = $('#noticeBanner'); const nd = S.settings.noticeDate;
