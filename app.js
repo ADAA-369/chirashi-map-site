@@ -491,7 +491,7 @@ function filteredRecords() {
 }
 
 function renderAll() {
-  renderChips(); renderNotice(); renderLegend(); renderRecords(); renderBoards(); renderSpots(); renderAssignments(); renderStations();
+  renderChips(); renderNotice(); renderLegend(); renderRecords(); renderBoards(); renderSpots(); renderAssignments(); renderStations(); renderDash();
 }
 
 function renderRecords() {
@@ -1821,6 +1821,54 @@ function quickPin(latLng) {
   $('#qpBoard').onclick = () => { if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } toggleBoards(true); addBoardForm(latLng); setTimeout(() => { const n = $('#bPlace'); if (n && !n.value && it.name !== '選んだ地点') n.value = it.name; }, 30); };
 }
 
+/* ---------------- PC用 左パネル（ダッシュボード） ---------------- */
+const isDesktop = () => window.matchMedia('(min-width: 1024px)').matches;
+function placeSheet() {
+  // PCでは右パネルを地図の枠（ヘッダーの下）に、スマホでは画面全体の下に置く
+  const sheet = $('#sheet'), main = $('#main'), app = $('#app');
+  if (isDesktop() && sheet.parentElement !== main) main.appendChild(sheet);
+  else if (!isDesktop() && sheet.parentElement !== app) app.appendChild(sheet);
+}
+function renderDash() {
+  placeSheet();
+  const el = $('#dash'); if (!el) return;
+  if (!isDesktop()) { el.hidden = true; return; }
+  el.hidden = false;
+  const t = today(); const recs30 = filteredRecords(); const recsToday = S.records.filter(r => r.date === t);
+  const sumCount = a => a.reduce((x, r) => x + (r.count || 0), 0);
+  const totals = flyerTotals().filter(f => S.filter.flyers.has(f.id));
+  const up = upcoming(S.events).slice(0, 5);
+  const spotName = id => S.spots.find(x => x.id === id)?.name || '';
+  const off = S.boards.filter(b => (b.kind || 'official') === 'official'); const offDone = off.filter(b => b.status === 'done').length;
+  const gen = S.boards.filter(b => b.kind === 'general'); const genDone = gen.filter(b => b.status === 'done').length;
+  const myAsg = S.assignments.filter(a => a.status !== 'done' && (a.member === S.user || !a.member));
+  const recent = [...S.records].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 10);
+  const period = S.filter.period === 'all' ? '全期間' : `直近${S.filter.period}日`;
+  el.innerHTML = `
+    <div class="card"><div class="row2"><div><div class="small">今日の配布</div><div class="big">${sumCount(recsToday).toLocaleString()}<span class="small"> 枚／${recsToday.length}件</span></div></div><div style="text-align:right"><div class="small">${period}</div><div class="big">${sumCount(recs30).toLocaleString()}<span class="small"> 枚／${recs30.length}件</span></div></div></div></div>
+    <h4>チラシ別（残り）</h4>
+    <div class="card">${totals.length ? totals.map(f => `<div class="row2" style="margin:4px 0"><span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${safeColor(f.color)};margin-right:6px"></span>${esc(f.name)}</span><b>${f.used.toLocaleString()}${f.total ? ` / ${f.total.toLocaleString()}` : ''}枚</b></div>${f.total ? `<div class="bar"><i style="width:${Math.min(100, Math.round(f.used / f.total * 100))}%"></i></div><div class="small" style="text-align:right">残り ${f.remain.toLocaleString()}</div>` : ''}`).join('') : '<div class="small">表示中のチラシがありません</div>'}</div>
+    <h4>次の予定</h4>
+    <div class="card">${up.length ? up.map(e => `<div class="recItem" data-ev="${esc(e.id)}"><span class="t"><b>${fmtDate(e.date)}</b> ${esc(e.time || '')} ${esc(spotName(e.spot_id))}</span><span class="n">${Array.isArray(e.attendees) && e.attendees.length ? `参加${e.attendees.length}` : ''}</span></div>`).join('') : '<div class="small">予定はありません</div>'}</div>
+    <h4>ポスター</h4>
+    <div class="card"><div class="row2"><span>掲示場</span><b>${offDone}/${off.length}${off.length ? `（${Math.round(offDone / off.length * 100)}%）` : ''}</b></div>${off.length ? `<div class="bar"><i style="width:${Math.round(offDone / off.length * 100)}%"></i></div>` : ''}<div class="row2" style="margin-top:6px"><span>一般</span><b>${genDone}/${gen.length}</b></div></div>
+    ${myAsg.length ? `<h4>自分の割り当て（未完了 ${myAsg.length}）</h4><div class="card">${myAsg.slice(0, 5).map(a => `<div class="recItem" data-asg="${esc(a.id)}"><span class="t">${esc(a.town || '')}${a.flyer_id ? ' ／ ' + esc(flyerOf(a.flyer_id).name) : ''}</span><span class="n">${a.due ? '〜' + fmtDate(a.due) : ''}</span></div>`).join('')}</div>` : ''}
+    <h4>最近の記録</h4>
+    <div class="card">${recent.length ? recent.map(r => `<div class="recItem" data-rec="${esc(r.id)}"><span class="sw" style="background:${flyerOf(r.flyer_id).color}"></span><span class="t">${fmtDate(r.date)} ${esc(r.member)} ${esc(r.town || '')}</span><span class="n">${(r.count || 0).toLocaleString()}枚</span></div>`).join('') : '<div class="small">まだ記録がありません</div>'}</div>
+    <h4>画面</h4>
+    <div class="navBtns">
+      <button data-go="list">📋 配布一覧・CSV</button><button data-go="towns">🏘 町丁目の配布率</button>
+      <button data-go="boards">📌 ポスター掲示場</button><button data-go="spots">🎤 拠点・辻立ち</button>
+      <button data-go="assign">📋 配布の割り当て</button><button data-go="study">📚 学習・資料</button>
+      <button data-go="rules">⚠ してはいけないこと</button>${isAdmin() ? '<button data-go="settings">⚙ 設定</button>' : ''}
+    </div>
+    <div class="small" style="margin-top:10px;color:var(--muted)">👤 ${esc(S.user || '')}　／　同じチラシの重なりは赤、町丁目の白線をクリックで配布率</div>`;
+  el.querySelectorAll('[data-rec]').forEach(x => x.onclick = () => { const r = S.records.find(y => y.id === x.dataset.rec); if (!r) return; const c = turf.centerOfMass(recPolygon(r)).geometry.coordinates; S.map.panTo({ lat: c[1], lng: c[0] }); if (S.map.getZoom() < 16) S.map.setZoom(16); showRecord(r); });
+  el.querySelectorAll('[data-ev]').forEach(x => x.onclick = () => { const e = S.events.find(y => y.id === x.dataset.ev); const sp = e && S.spots.find(y => y.id === e.spot_id); if (!sp) return; S.map.panTo({ lat: sp.lat, lng: sp.lng }); showSpot(sp); });
+  el.querySelectorAll('[data-asg]').forEach(x => x.onclick = () => { const a = S.assignments.find(y => y.id === x.dataset.asg); if (!a) return; const c = turf.centerOfMass(turf.polygon([a.polygon])).geometry.coordinates; S.map.panTo({ lat: c[1], lng: c[0] }); showAssignment(a); });
+  el.querySelectorAll('[data-go]').forEach(x => x.onclick = () => ({ list: showList, towns: () => showTownTable('has'), boards: () => toggleBoards(true), spots: () => toggleSpotBar(true), assign: () => toggleAssignBar(true), study: () => showStudy('core'), rules: () => showRules(false), settings: showSettings })[x.dataset.go]());
+}
+
 /* ---------------- UI バインド ---------------- */
 function bindUI() {
   $('#periodSel').value = S.filter.period;
@@ -1863,6 +1911,8 @@ function bindUI() {
   $('#btnPinOk').onclick = () => endPinPlace(true);
   $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; let saved = null; try { saved = JSON.parse(localStorage.getItem('cm_user') || 'null'); } catch { } localStorage.removeItem('cm_user'); showLogin(null, USE_SUPABASE && saved?.pass ? { verified: true, pass: saved.pass } : {}); };
   $('#sheetHandle').onclick = userCloseSheet;
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheet').hidden) userCloseSheet(); });
+  let _rt = null; window.addEventListener('resize', () => { clearTimeout(_rt); _rt = setTimeout(() => { renderDash(); if (S.map) google.maps.event.trigger(S.map, 'resize'); }, 200); });
   (() => {
     const sheet = $('#sheet'), body = $('#sheetBody'); let sy = null, sx = null, dragging = false, moved = 0;
     sheet.addEventListener('touchstart', e => { const t = e.touches[0]; sy = t.clientY; sx = t.clientX; moved = 0; dragging = (body.scrollTop <= 0); }, { passive: true });

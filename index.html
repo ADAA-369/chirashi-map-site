@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="配布MAP">
-<link rel="stylesheet" href="style.css?v=20260908104228">
+<link rel="stylesheet" href="style.css?v=20260908152318">
 </head>
 <body>
 
@@ -42,6 +42,9 @@
     <div id="searchResults"></div>
   </div>
 
+  <!-- PC用：地図＋左パネル -->
+  <div id="main">
+  <aside id="dash" hidden></aside>
   <!-- 地図（描画レイヤーと同じ枠） -->
   <div id="mapWrap">
   <div id="map"></div>
@@ -121,6 +124,7 @@
   <div id="zoomBtns"><button id="zoomIn" aria-label="拡大">＋</button><button id="zoomOut" aria-label="縮小">−</button></div>
   <div id="centerMark" aria-hidden="true">＋</div>
   </div><!-- /mapWrap -->
+  </div><!-- /main -->
 
 
   <!-- 記録ボタン -->
@@ -172,9 +176,9 @@
   <div id="toast" hidden></div>
 </div>
 
-<script src="config.js?v=20260908104228"></script>
+<script src="config.js?v=20260908152318"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
-<script src="app.js?v=20260908104228"></script>
+<script src="app.js?v=20260908152318"></script>
 </body>
 </html>

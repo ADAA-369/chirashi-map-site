@@ -53,6 +53,7 @@ h1,h2,h3{margin:0 0 8px}
 #noticeBanner.lock{background:#4a1214;color:#ffb3b5;border-color:#7a1e22}
 
 /* map */
+#main{flex:1;display:flex;min-height:0;position:relative}
 #mapWrap{flex:1;position:relative;min-height:0}
 #map{position:absolute;inset:0}
 
@@ -191,3 +192,37 @@ th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--pan
 #toast{position:absolute;left:50%;bottom:calc(90px + var(--safe-bottom));transform:translateX(-50%);z-index:60;background:#000c;color:#fff;padding:10px 16px;border-radius:999px;font-size:14px;white-space:nowrap}
 
 [hidden]{display:none !important}
+
+
+/* ===== PC（幅1024px以上）：左パネル＋右パネル ===== */
+@media (min-width:1024px){
+  #dash{display:flex;flex-direction:column;width:320px;flex:none;background:var(--panel);border-right:1px solid var(--border);overflow:auto;padding:10px 12px calc(12px + var(--safe-bottom))}
+  #dash[hidden]{display:none}
+  #dash h4{margin:12px 0 6px;font-size:12px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+  #dash .card{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+  #dash .big{font-size:22px;font-weight:800;line-height:1.1}
+  #dash .row2{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+  #dash .navBtns{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  #dash .navBtns button{padding:9px 8px;border-radius:10px;background:var(--panel2);border:1px solid var(--border);font-size:13px;text-align:left}
+  #dash .navBtns button:hover{border-color:var(--orange)}
+  #dash .recItem{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer}
+  #dash .recItem:hover{background:rgba(255,255,255,.03)}
+  #dash .recItem .sw{width:10px;height:10px;border-radius:3px;flex:none}
+  #dash .recItem .t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #dash .recItem .n{color:var(--muted)}
+  #dash .bar{margin-top:4px}
+  #dash .small{font-size:12px}
+  /* 詳細・入力は右パネル */
+  #sheet{left:auto;right:0;top:0;bottom:0;width:440px;max-height:none;border-radius:0;border-left:1px solid var(--border);box-shadow:-8px 0 30px rgba(0,0,0,.45)}
+  #sheetHandle{display:none}
+  #sheetBody{padding:16px 18px calc(16px + var(--safe-bottom))}
+  .tableWrap{max-height:none}
+  /* 凡例はパネル側に集約 */
+  #legendBtn,#legend{display:none !important}
+  /* 上部バーのタイトルを少し大きく */
+  #title .t2{font-size:18px}
+  #title .t1{font-size:11px}
+  .chips{padding-left:2px}
+  #fab{bottom:24px}
+  #zoomBtns{bottom:120px}
+}
