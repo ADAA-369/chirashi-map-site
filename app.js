@@ -417,7 +417,7 @@ function styleAdmin() {
   const z = S.map.getZoom();
   const on = adminOnSet();
   S.adminLayer.setStyle(f => { const n = f.getProperty('name'); const c = ADMIN_COLORS[n] || '#ffd60a';
-    return { visible: on.has(n), clickable: false, fillColor: c, fillOpacity: z >= 13 ? 0 : 0.08, strokeColor: c, strokeOpacity: 0.95, strokeWeight: z >= 15 ? 3 : z >= 12 ? 3.5 : 2.5, zIndex: 3 }; });
+    return { visible: on.has(n), clickable: false, fillColor: c, fillOpacity: 0.08, strokeColor: c, strokeOpacity: 0.95, strokeWeight: z >= 15 ? 3 : z >= 12 ? 3.5 : 2.5, zIndex: 3 }; });
 }
 
 /* ---------------- 町丁目 ---------------- */
