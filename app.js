@@ -294,6 +294,7 @@ async function initMap() {
     disableDefaultUI: true, zoomControl: false, mapTypeControl: true,
     mapTypeControlOptions: { mapTypeIds: ['hybrid', 'roadmap'], position: google.maps.ControlPosition.RIGHT_TOP },
     gestureHandling: 'greedy', clickableIcons: false,
+    isFractionalZoomEnabled: true,   // ピンチで無段階に拡大縮小（整数段階に吸着させない）
   });
   class Proj extends OverlayView { onAdd() { } draw() { } onRemove() { } }
   S.proj = new Proj(); S.proj.setMap(S.map);
@@ -316,9 +317,9 @@ async function initMap() {
   };
   S.map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(loc);
   // ＋−は半段階ずつ（Googleの1段階＝2倍は大きすぎるため）。長押しで連続
-  const zoomBy = d => S.map.setZoom(Math.round((S.map.getZoom() + d) * 2) / 2);
+  const zoomBy = d => S.map.setZoom(S.map.getZoom() + d);
   const holdZoom = (btn, d) => { let t = null, rep = null; const start = e => { e.preventDefault(); zoomBy(d); t = setTimeout(() => { rep = setInterval(() => zoomBy(d), 220); }, 400); }; const stop = () => { clearTimeout(t); clearInterval(rep); t = rep = null; }; btn.addEventListener('pointerdown', start); btn.addEventListener('pointerup', stop); btn.addEventListener('pointercancel', stop); btn.addEventListener('pointerleave', stop); };
-  holdZoom($('#zoomIn'), 0.5); holdZoom($('#zoomOut'), -0.5);
+  holdZoom($('#zoomIn'), 0.35); holdZoom($('#zoomOut'), -0.35);
 
   S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); });
   S.map.addListener('idle', () => {
