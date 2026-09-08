@@ -346,7 +346,15 @@ async function initMap() {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
     styleTowns();
     const z = S.map.getZoom();
-    clearTimeout(S._idleT); S._idleT = setTimeout(() => { if (S.drawing || S.adjust) return; renderRecords(); renderAssignments(); if (S._lastZoom !== undefined && z !== S._lastZoom) renderSpots(); S._lastZoom = z; }, 250);
+    const band = z >= 16 ? 4 : z >= 15 ? 3 : z >= 14 ? 2 : z >= 13 ? 1 : 0;
+    clearTimeout(S._idleT); S._idleT = setTimeout(() => {
+      if (S.drawing || S.adjust) return;
+      const vb = viewBbox(0); const prev = S._lastVb;
+      const moved = !prev || !vb || vb[0] < prev[0] || vb[1] < prev[1] || vb[2] > prev[2] || vb[3] > prev[3];   // 前回描いた余白の外に出たか
+      if (S._band !== band || moved) { renderRecords(); renderAssignments(); S._lastVb = viewBbox(0.3); }
+      if (S._band !== undefined && S._band !== band) { renderSpots(); styleTowns(); }
+      S._band = band;
+    }, 250);
   });
 }
 
@@ -895,11 +903,16 @@ function showList() {
     S.map.panTo({ lat: c[1], lng: c[0] }); showRecord(r);
   });
 }
+async function downloadOrShare(filename, text, mime) {
+  const blob = new Blob([text], { type: mime });
+  try { const file = new File([blob], filename, { type: mime }); if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: filename }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+}
 function exportCsv(recs) {
   const head = ['日付', '配った人', 'チラシ', '部数', '推定世帯', '主な町丁目', '面積m2', 'メモ', '登録日時'];
   const rows = recs.map(r => [r.date, r.member, flyerOf(r.flyer_id).name, r.count, r.est_setai ?? '', r.town ?? '', r.area_m2 ?? '', r.memo ?? '', r.created_at]);
   const csv = '﻿' + [head, ...rows].map(a => a.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `チラシ配布_${today()}.csv`; a.click();
+  downloadOrShare(`チラシ配布_${today()}.csv`, csv, 'text/csv');
 }
 
 function showTownTable(mode = 'has') {
@@ -1113,7 +1126,8 @@ async function showBoard(b) {
     </div>
     <label>担当・貼った人<select id="bBy">${S.settings.members.map(m => `<option ${((b.posted_by || S.user) === m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
     <label>${b.kind === 'political' ? '設置日' : '日付'}<input id="bDate" type="date" value="${esc(b.posted_at || today())}"></label>
-    <label>写真（任意・自動で縮小します）<input id="bPhoto" type="file" accept="image/*" capture="environment"></label>
+    <label>写真（任意・自動で縮小します）</label>
+    <div class="btnRow" style="margin-top:0"><label class="ghost fileBtn">📷 カメラで撮る<input id="bPhoto" type="file" accept="image/*" capture="environment" hidden></label><label class="ghost fileBtn">🖼 写真から選ぶ<input id="bPhoto2" type="file" accept="image/*" hidden></label></div>
     <div class="photoBox" id="bPhotoBox">${b.photo_path ? '<div class="small">写真を読み込み中…</div>' : ''}</div>
     <label>メモ（例：破損あり、貼る位置が高い）<input id="bMemo" type="text" value="${esc(b.memo || '')}"></label>
     ${extLinks(b.lat, b.lng)}
@@ -1129,6 +1143,7 @@ async function showBoard(b) {
   $('#sheetBody').querySelectorAll('.stTabs button').forEach(btn => btn.onclick = () => { status = btn.dataset.st; $('#sheetBody').querySelectorAll('.stTabs button').forEach(x => x.classList.toggle('on', x === btn)); });
   if (b.photo_path) { const url = await store.photoUrl(b.photo_path); $('#bPhotoBox').innerHTML = url ? `<img src="${esc(url)}" alt="貼付写真">` : '<div class="small">写真を表示できません</div>'; }
   let newBlob = null;
+  $('#bPhoto2').onchange = e => $('#bPhoto').onchange(e);
   $('#bPhoto').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
     newBlob = await shrinkImage(f, 1280, 0.8);
@@ -1181,7 +1196,7 @@ function showBoardList() {
     const head = ['種類', '番号', '場所', '状態', '貼った人', '日付', '緯度', '経度', 'メモ'];
     const data = rows.map(b => [BOARD_KIND[b.kind || 'official'].short, b.no, b.place, BOARD_ST_LABEL(b.status), b.posted_by || '', b.posted_at || '', b.lat, b.lng, b.memo || '']);
     const csv = '﻿' + [head, ...data].map(a => a.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `ポスター_${today()}.csv`; a.click();
+    downloadOrShare(`ポスター_${today()}.csv`, csv, 'text/csv');
   };
   $('#sheetBody').querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => { const b = S.boards.find(x => x.id === tr.dataset.id); if (!b) return; S.map.panTo({ lat: b.lat, lng: b.lng }); showBoard(b); });
 }
@@ -1561,7 +1576,7 @@ function renderStations() {
 /* ---------------- LINE用まとめ（コピー） ---------------- */
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); toast('コピーしました。LINEに貼り付けてください'); }
-  catch { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); toast('コピーしました'); } catch { prompt('長押しでコピーしてください', text); } ta.remove(); }
+  catch { const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.top = '0'; document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, 999999); try { document.execCommand('copy'); toast('コピーしました'); } catch { prompt('長押しでコピーしてください', text); } ta.remove(); }
 }
 function summaryText(recs) {
   const per = S.filter.period; const label = per === 'all' ? '全期間' : `直近${per}日`;
