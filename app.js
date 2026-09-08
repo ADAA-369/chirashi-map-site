@@ -202,11 +202,11 @@ async function init() {
   await login();                       // 合言葉の検証と名前の選択（設定はこの中で読み込む）
   [S.records, S.boards, S.spots, S.events, S.assignments] = await Promise.all([store.loadRecords(), store.loadBoards(), store.loadSpots(), store.loadEvents(), store.loadAssignments()]);
   fetch('data/stations.json').then(r => r.json()).then(d => { S.stations = d; renderStations(); }).catch(() => {});
-  loadAdminLayer();
   S.filter.flyers = new Set(S.settings.flyers.map(f => f.id));
   await loadGoogleMaps();
   await initMap();
   await loadTowns();
+  loadAdminLayer();
   renderAll(); applyRole();
   if (USE_SUPABASE) { try { const { data } = await SupabaseStore.client.rpc('sync_stamp'); SupabaseStore._stamp = data; } catch { } }
   if (localStorage.getItem('cm_rules_ack') !== String(RULES_VERSION)) setTimeout(() => showRules(true), 800);
@@ -411,7 +411,7 @@ async function loadAdminLayer() {
   } catch (e) { console.warn('admin layer', e); }
 }
 function styleAdmin() {
-  if (!S.adminLayer) return;
+  if (!S.adminLayer || !S.map) return;
   const z = S.map.getZoom();
   const on = adminOnSet();
   S.adminLayer.setStyle(f => { const n = f.getProperty('name'); const c = ADMIN_COLORS[n] || '#ffd60a';
