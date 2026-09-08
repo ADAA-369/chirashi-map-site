@@ -450,9 +450,8 @@ const OAZA_BASE = DATA_BASE.replace('by_city', 'oaza');
 const OAZA_COLOR = '#ffe270';   // 色の指定がない市町村用
 // 地名を表示する市町村（端末ごと）。初期は蟹江町だけ
 function oazaCitySet() { try { const a = JSON.parse(localStorage.getItem('cm_oaza_cities') || 'null'); return new Set(Array.isArray(a) ? a : ['蟹江町']); } catch { return new Set(['蟹江町']); } }
-// 市町村の色を濃くした線色（蟹江のオレンジ→濃いオレンジ）
-const darken = (hex, f = 0.72) => '#' + [1, 3, 5].map(i => Math.round(parseInt(hex.slice(i, i + 2), 16) * f).toString(16).padStart(2, '0')).join('');
-const oazaColor = city => ADMIN_COLORS[city] ? darken(ADMIN_COLORS[city]) : OAZA_COLOR;
+// 地名の線色＝その市町村の境界線と同じ色（本人指定：濃い版は分かりにくい）
+const oazaColor = city => ADMIN_COLORS[city] || OAZA_COLOR;
 async function loadOaza() {
   if (!S.map) return;
   try {
@@ -749,7 +748,7 @@ function flyerTotals() {
 function renderLegend() {
   const n = filteredRecords().length;
   const stock = flyerTotals().filter(f => S.filter.flyers.has(f.id)).map(f => `<div class="lg"><span class="sw" style="background:${f.color};border-color:${f.color}"></span><span>${esc(f.name)} ${f.used.toLocaleString()}${f.total ? ` / ${f.total.toLocaleString()}枚　<b style="color:${f.remain < 0 ? '#ff7b72' : '#e8eef5'}">残り ${f.remain.toLocaleString()}</b>` : '枚'}</span></div>`).join('');
-  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="lg"><span class="sw" style="border-color:${oazaColor('蟹江町')};background:none"></span>地名・丁目なし＝市町村の色の濃い線（市町村チップから表示／名前タップで配布率）</div><div class="lg" style="flex-wrap:wrap;gap:4px 8px">${Object.entries(ADMIN_COLORS).map(([n, c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span class="sw" style="border-color:${c};background:none;width:12px;height:8px"></span>${n}</span>`).join('')}</div><div class="small">表示中 ${n}件</div>`;
+  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="lg"><span class="sw" style="border-color:${oazaColor('蟹江町')};background:none"></span>地名・丁目なし＝市町村と同じ色の細い線（市町村チップから表示／名前タップで配布率）</div><div class="lg" style="flex-wrap:wrap;gap:4px 8px">${Object.entries(ADMIN_COLORS).map(([n, c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span class="sw" style="border-color:${c};background:none;width:12px;height:8px"></span>${n}</span>`).join('')}</div><div class="small">表示中 ${n}件</div>`;
 }
 function renderNotice() {
   const b = $('#noticeBanner'); const nd = S.settings.noticeDate;
