@@ -221,6 +221,8 @@ async function init() {
 /* ---------------- ログイン（合言葉＋名前） ---------------- */
 function login() {
   return new Promise(async resolve => {
+    // 開発プレビュー用：URLの#（サーバーに送られない部分）に p=合言葉&u=名前 があれば自動ログイン
+    try { const h = new URLSearchParams(location.hash.slice(1)); if (h.get('p') && h.get('u')) { localStorage.setItem('cm_user', JSON.stringify({ name: h.get('u'), pass: h.get('p') })); history.replaceState(null, '', location.pathname + location.search); } } catch { }
     let saved = null; try { saved = JSON.parse(localStorage.getItem('cm_user') || 'null'); } catch { }
     if (saved?.name) {
       try {
