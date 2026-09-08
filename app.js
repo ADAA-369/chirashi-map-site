@@ -365,11 +365,11 @@ async function initMap() {
 // 表示する市区町村と色（本人指定。ここにない市町村は線を出さない）
 const ADMIN_COLORS = {
   '蟹江町': '#e65100',  // 濃いオレンジ
-  'あま市': '#0277bd',  // 濃い水色
+  'あま市': '#ad1457',  // ワイン（弥富と入れ替え）
   '一宮市': '#c62828',  // 赤
   '稲沢市': '#1b5e20',  // 濃い緑
   '愛西市': '#e91e63',  // ピンク（本人指定）
-  '弥富市': '#ad1457',  // 濃いピンク（ワイン）
+  '弥富市': '#0277bd',  // 濃い水色（あまと入れ替え）
   '飛島村': '#00695c',  // 濃い青緑
   '津島市': '#283593',  // 濃い紺
   '大治町': '#795548',  // 濃い茶
@@ -402,6 +402,8 @@ function renderAdminChips() {
     };
   });
 }
+// 隣接する境界で「どちらの色を上に描くか」（数字が大きいほど上）。津島は愛西に囲まれて見えにくいので最優先
+const ADMIN_Z = { '津島市': 6, '蟹江町': 5, '大治町': 4 };
 async function loadAdminLayer() {
   try {
     const gj = await fetch('data/admin_aichi.geojson').then(r => r.json());
@@ -417,7 +419,7 @@ function styleAdmin() {
   const z = S.map.getZoom();
   const on = adminOnSet();
   S.adminLayer.setStyle(f => { const n = f.getProperty('name'); const c = ADMIN_COLORS[n] || '#ffd60a';
-    return { visible: on.has(n), clickable: false, fillColor: c, fillOpacity: 0.08, strokeColor: c, strokeOpacity: 0.95, strokeWeight: z >= 15 ? 3 : z >= 12 ? 3.5 : 2.5, zIndex: 3 }; });
+    return { visible: on.has(n), clickable: false, fillColor: c, fillOpacity: 0.08, strokeColor: c, strokeOpacity: 0.95, strokeWeight: z >= 15 ? 3 : z >= 12 ? 3.5 : 2.5, zIndex: ADMIN_Z[n] || 3 }; });
 }
 
 /* ---------------- 町丁目 ---------------- */
