@@ -142,6 +142,7 @@ h1,h2,h3{margin:0 0 8px}
 /* 記録ラベル */
 .recLabel{position:absolute;transform:translate(-50%,-50%);background:rgba(10,16,24,.94);color:#fff;border:2px solid;border-radius:10px;padding:5px 9px;font-size:12.5px;line-height:1.35;white-space:nowrap;text-align:center;pointer-events:none;box-shadow:0 3px 12px rgba(0,0,0,.6);text-shadow:0 1px 1px #000}
 
+.oazaLabel{position:absolute;transform:translate(-50%,-50%);color:#fff9d6;font-weight:900;font-size:12.5px;letter-spacing:.04em;white-space:nowrap;text-align:center;pointer-events:auto;padding:4px 6px;text-shadow:0 0 3px #000,0 0 3px #000,0 1px 2px #000,0 0 8px rgba(0,0,0,.9);user-select:none;-webkit-user-select:none}
 .spotLabel{transform:translate(-50%,-100%);font-size:12px;padding:4px 8px;border-radius:9px;background:rgba(10,16,24,.92)}
 .spotLabel::after{content:'';position:absolute;left:50%;bottom:-7px;transform:translateX(-50%);border:6px solid transparent;border-top-color:rgba(10,16,24,.92);border-bottom:0}
 

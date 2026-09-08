@@ -174,6 +174,7 @@ const S = window.S = {
   spots: [], events: [], spotMarkers: new Map(), spotLabels: [], spotsOn: true, spotBarOn: false, spotAdding: false,
   assignments: [], asgPolys: new Map(), asgLabels: [], assignBarOn: false, drawPurpose: 'record',
   stations: [], stationMarkers: [], stationsOn: true,
+  oaza: [], oazaLayer: null, oazaLabels: [],   // 地名（丁目なし）の枠とラベル
 };
 
 const $ = s => document.querySelector(s);
@@ -207,6 +208,7 @@ async function init() {
   await initMap();
   await loadTowns();
   loadAdminLayer();
+  loadOaza();
   renderAll(); applyRole();
   if (USE_SUPABASE) { try { const { data } = await SupabaseStore.client.rpc('sync_stamp'); SupabaseStore._stamp = data; } catch { } }
   if (localStorage.getItem('cm_rules_ack') !== String(RULES_VERSION)) setTimeout(() => showRules(true), 800);
@@ -354,8 +356,8 @@ async function initMap() {
       if (S.drawing || S.adjust) return;
       const vb = viewBbox(0); const prev = S._lastVb;
       const moved = !prev || !vb || vb[0] < prev[0] || vb[1] < prev[1] || vb[2] > prev[2] || vb[3] > prev[3];   // 前回描いた余白の外に出たか
-      if (S._band !== band || moved) { renderRecords(); renderAssignments(); S._lastVb = viewBbox(0.3); }
-      if (S._band !== undefined && S._band !== band) { renderSpots(); styleTowns(); styleAdmin(); }
+      if (S._band !== band || moved) { renderRecords(); renderAssignments(); renderOazaLabels(); S._lastVb = viewBbox(0.3); }
+      if (S._band !== undefined && S._band !== band) { renderSpots(); styleTowns(); styleAdmin(); styleOaza(); }
       S._band = band;
     }, 250);
   });
@@ -380,23 +382,25 @@ function adminOnSet() { try { const a = JSON.parse(localStorage.getItem('cm_admi
 function adminOrder() { const all = Object.keys(ADMIN_COLORS); try { const o = JSON.parse(localStorage.getItem('cm_admin_order') || 'null'); if (Array.isArray(o)) return [...o.filter(n => all.includes(n)), ...all.filter(n => !o.includes(n))]; } catch { } return all; }
 function renderAdminChips() {
   const el = $('#adminChips'); if (!el) return; const on = adminOnSet();
-  el.innerHTML = `<button class="chip ${on.size === Object.keys(ADMIN_COLORS).length ? 'on' : ''}" data-n="__all" style="--c:#555" title="全部の境界線をON/OFF"><span class="dot" style="background:#ddd"></span>境界線</button>` +
+  el.innerHTML = `<button class="chip ${oazaOn() ? 'on' : ''}" data-n="__oaza" style="--c:${OAZA_COLOR}" title="地名（丁目なし）の枠と名前をON/OFF"><span class="dot"></span>地名</button>` +
+    `<button class="chip ${on.size === Object.keys(ADMIN_COLORS).length ? 'on' : ''}" data-n="__all" style="--c:#555" title="全部の境界線をON/OFF"><span class="dot" style="background:#ddd"></span>境界線</button>` +
     adminOrder().map(n => { const c = ADMIN_COLORS[n]; return `<button class="chip ${on.has(n) ? 'on' : ''}" data-n="${esc(n)}" style="--c:${c}" draggable="true" title="長押し／ドラッグで並べ替え"><span class="dot"></span>${esc(n.replace(/(市|町|村)$/, ''))}</button>`; }).join('');
   el.querySelectorAll('.chip').forEach(b => {
     b.onclick = () => {
       const cur = adminOnSet(); const n = b.dataset.n;
+      if (n === '__oaza') { localStorage.setItem('cm_oaza_on', oazaOn() ? '0' : '1'); renderAdminChips(); styleOaza(); renderOazaLabels(); return; }
       if (n === '__all') { const all = Object.keys(ADMIN_COLORS); if (cur.size === all.length) cur.clear(); else all.forEach(x => cur.add(x)); }
       else if (cur.has(n)) cur.delete(n); else cur.add(n);
       localStorage.setItem('cm_admin_on', JSON.stringify([...cur])); renderAdminChips(); styleAdmin();
     };
-    if (b.dataset.n === '__all') return;
+    if (b.dataset.n === '__all' || b.dataset.n === '__oaza') return;
     b.ondragstart = e => { e.dataTransfer.setData('text/plain', b.dataset.n); e.dataTransfer.effectAllowed = 'move'; b.classList.add('dragging'); };
     b.ondragend = () => b.classList.remove('dragging');
     b.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; b.classList.add('dragOver'); };
     b.ondragleave = () => b.classList.remove('dragOver');
     b.ondrop = e => {
       e.preventDefault(); b.classList.remove('dragOver');
-      const from = e.dataTransfer.getData('text/plain'), to = b.dataset.n; if (!from || from === to || !ADMIN_COLORS[from]) return;
+      const from = e.dataTransfer.getData('text/plain'), to = b.dataset.n; if (!from || from === to || !ADMIN_COLORS[from] || !ADMIN_COLORS[to]) return;
       const arr = adminOrder(); const fi = arr.indexOf(from), ti = arr.indexOf(to); const [m] = arr.splice(fi, 1); arr.splice(ti, 0, m);
       localStorage.setItem('cm_admin_order', JSON.stringify(arr)); renderAdminChips(); toast('並び順を変えました（この端末だけ）');
     };
@@ -420,6 +424,61 @@ function styleAdmin() {
   const on = adminOnSet();
   S.adminLayer.setStyle(f => { const n = f.getProperty('name'); const c = ADMIN_COLORS[n] || '#ffd60a';
     return { visible: on.has(n), clickable: false, fillColor: c, fillOpacity: 0.08, strokeColor: c, strokeOpacity: 0.95, strokeWeight: z >= 15 ? 3 : z >= 12 ? 3.5 : 2.5, zIndex: ADMIN_Z[n] || 3 }; });
+}
+
+/* ---------------- 地名（丁目なしの大字・町名） ---------------- */
+// 町丁目を「学戸一〜七丁目→学戸」のようにまとめた枠。data/oaza/ は tools/build_oaza.mjs で生成
+const OAZA_BASE = DATA_BASE.replace('by_city', 'oaza');
+const OAZA_COLOR = '#ffe270';
+const oazaOn = () => localStorage.getItem('cm_oaza_on') !== '0';
+async function loadOaza() {
+  if (!S.map) return;
+  try {
+    const files = S.settings.cities || DEFAULT_CITIES;
+    const results = await Promise.allSettled(files.map(f => fetch(OAZA_BASE + f + '.geojson').then(r => r.json())));
+    const { Data } = await google.maps.importLibrary('maps');
+    S.oazaLayer = new Data({ map: S.map });
+    for (const r of results) {
+      if (r.status !== 'fulfilled') continue;
+      for (const f of r.value.features) {
+        const p = f.properties; f.id = `oaza_${p.code}_${p.name}`;
+        S.oaza.push({ feature: f, name: p.name, city: p.city, setai: p.setai, jinko: p.jinko, n: p.n, towns: new Set(p.towns), bbox: turf.bbox(f), lab: { lat: p.ly, lng: p.lx } });
+        S.oazaLayer.addGeoJson(f);
+      }
+    }
+    styleOaza(); renderOazaLabels(); renderAdminChips(); renderLegend();
+  } catch (e) { console.warn('oaza layer', e); }
+}
+function styleOaza() {
+  if (!S.oazaLayer || !S.map) return;
+  const z = S.map.getZoom(); const on = oazaOn();
+  S.oazaLayer.setStyle({ visible: on && z >= 12.5, clickable: false, fillOpacity: 0, strokeColor: OAZA_COLOR, strokeOpacity: 0.9, strokeWeight: z >= 16 ? 2.5 : z >= 14 ? 2 : 1.5, zIndex: 2 });
+}
+// 地名ラベル：表示範囲内だけ描く。タップで地名全体の配布率
+function renderOazaLabels() {
+  for (const l of S.oazaLabels) l.setMap(null); S.oazaLabels = [];
+  if (!S.map || !oazaOn() || S.map.getZoom() < 13.5) return;
+  ensureLabelClass(); const vb = viewBbox(0.15); if (!vb) return;
+  for (const o of S.oaza) {
+    if (!bboxHit(vb, o.bbox)) continue;
+    const lb = new RecLabel(o.lab, esc(o.name), null, { cls: 'oazaLabel' });
+    lb.onClick = () => showOazaInfo(o);
+    lb.setMap(S.map); S.oazaLabels.push(lb);
+  }
+}
+function showOazaInfo(o) {
+  if (!o || S.drawing || !overlaysClickable()) return;
+  const recs = filteredRecords();
+  const members = S.towns.filter(t => o.towns.has(t.id));
+  const rows = S.settings.flyers.filter(f => S.filter.flyers.has(f.id)).map(f => {
+    const fr = recs.filter(r => r.flyer_id === f.id); let hh = 0;
+    for (const t of members) hh += coverageOf(t, fr) * (t.setai || 0);
+    const cov = o.setai ? hh / o.setai : 0;
+    return `<div style="margin:4px 0"><span style="display:inline-block;width:10px;height:10px;background:${f.color};border-radius:2px;margin-right:6px"></span>${esc(f.name)}：<b>${Math.round(cov * 100)}%</b>（約${Math.round(hh)}世帯）</div>`;
+  }).join('');
+  const names = [...new Set(members.map(t => t.name))];
+  const html = `<div style="color:#222;font-size:13px;min-width:180px;max-width:260px"><b style="font-size:14px">${esc(o.city)} ${esc(o.name)}</b><div style="color:#666;margin:2px 0 6px">${o.setai.toLocaleString()}世帯 ／ ${o.jinko.toLocaleString()}人${o.n > 1 ? `　<span style="font-size:11px">町丁目${o.n}つ分の合計</span>` : ''}</div>${rows || '<div style="color:#666">表示中のチラシがありません</div>'}${o.n > 1 ? `<div style="color:#888;font-size:11px;margin-top:6px;line-height:1.4">${esc(names.join('・'))}</div>` : ''}</div>`;
+  S.infoWin.setContent(html); S.infoWin.setPosition(new google.maps.LatLng(o.lab.lat, o.lab.lng)); S.infoWin.open(S.map);
 }
 
 /* ---------------- 町丁目 ---------------- */
@@ -505,6 +564,7 @@ function ensureLabelClass() {
     constructor(pos, html, color, opt = {}) { super(); this.pos = pos; this.html = html; this.color = color; this.div = null; this.dy = opt.dy || 0; this.cls = opt.cls || 'recLabel'; }
     onAdd() {
       const d = document.createElement('div'); d.className = this.cls; if (this.color) d.style.borderColor = this.color; d.innerHTML = this.html;
+      if (this.onClick) { d.style.pointerEvents = 'auto'; d.style.cursor = 'pointer'; d.addEventListener('click', e => { e.stopPropagation(); this.onClick(e); }); }
       this.div = d; this.getPanes().floatPane.appendChild(d);   // 最前面。クリックはCSSでポリゴンへ通す
     }
     draw() {
@@ -665,7 +725,7 @@ function flyerTotals() {
 function renderLegend() {
   const n = filteredRecords().length;
   const stock = flyerTotals().filter(f => S.filter.flyers.has(f.id)).map(f => `<div class="lg"><span class="sw" style="background:${f.color};border-color:${f.color}"></span><span>${esc(f.name)} ${f.used.toLocaleString()}${f.total ? ` / ${f.total.toLocaleString()}枚　<b style="color:${f.remain < 0 ? '#ff7b72' : '#e8eef5'}">残り ${f.remain.toLocaleString()}</b>` : '枚'}</span></div>`).join('');
-  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="lg" style="flex-wrap:wrap;gap:4px 8px">${Object.entries(ADMIN_COLORS).map(([n, c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span class="sw" style="border-color:${c};background:none;width:12px;height:8px"></span>${n}</span>`).join('')}</div><div class="small">表示中 ${n}件</div>`;
+  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="lg"><span class="sw" style="border-color:${OAZA_COLOR};background:none"></span>地名・丁目なし（名前タップで配布率）</div><div class="lg" style="flex-wrap:wrap;gap:4px 8px">${Object.entries(ADMIN_COLORS).map(([n, c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span class="sw" style="border-color:${c};background:none;width:12px;height:8px"></span>${n}</span>`).join('')}</div><div class="small">表示中 ${n}件</div>`;
 }
 function renderNotice() {
   const b = $('#noticeBanner'); const nd = S.settings.noticeDate;
