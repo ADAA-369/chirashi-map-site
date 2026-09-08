@@ -202,6 +202,7 @@ async function init() {
   await login();                       // 合言葉の検証と名前の選択（設定はこの中で読み込む）
   [S.records, S.boards, S.spots, S.events, S.assignments] = await Promise.all([store.loadRecords(), store.loadBoards(), store.loadSpots(), store.loadEvents(), store.loadAssignments()]);
   fetch('data/stations.json').then(r => r.json()).then(d => { S.stations = d; renderStations(); }).catch(() => {});
+  loadAdminLayer();
   S.filter.flyers = new Set(S.settings.flyers.map(f => f.id));
   await loadGoogleMaps();
   await initMap();
@@ -352,10 +353,27 @@ async function initMap() {
       const vb = viewBbox(0); const prev = S._lastVb;
       const moved = !prev || !vb || vb[0] < prev[0] || vb[1] < prev[1] || vb[2] > prev[2] || vb[3] > prev[3];   // 前回描いた余白の外に出たか
       if (S._band !== band || moved) { renderRecords(); renderAssignments(); S._lastVb = viewBbox(0.3); }
-      if (S._band !== undefined && S._band !== band) { renderSpots(); styleTowns(); }
+      if (S._band !== undefined && S._band !== band) { renderSpots(); styleTowns(); styleAdmin(); }
       S._band = band;
     }, 250);
   });
+}
+
+/* ---------------- 市区町村の境界（愛知県・国土数値情報 N03） ---------------- */
+async function loadAdminLayer() {
+  try {
+    const gj = await fetch('data/admin_aichi.geojson').then(r => r.json());
+    const { Data } = await google.maps.importLibrary('maps');
+    S.adminLayer = new Data({ map: S.map });
+    S.adminLayer.addGeoJson(gj);
+    styleAdmin();
+  } catch (e) { console.warn('admin layer', e); }
+}
+function styleAdmin() {
+  if (!S.adminLayer) return;
+  const z = S.map.getZoom();
+  // 引いた時は太く目立たせ、寄った時は細く。町丁目の白線と区別するため黄色
+  S.adminLayer.setStyle({ clickable: false, fillOpacity: 0, strokeColor: '#ffd60a', strokeOpacity: z >= 14 ? 0.85 : 0.95, strokeWeight: z >= 15 ? 2.5 : z >= 12 ? 3 : 2, zIndex: 3 });
 }
 
 /* ---------------- 町丁目 ---------------- */
@@ -601,7 +619,7 @@ function flyerTotals() {
 function renderLegend() {
   const n = filteredRecords().length;
   const stock = flyerTotals().filter(f => S.filter.flyers.has(f.id)).map(f => `<div class="lg"><span class="sw" style="background:${f.color};border-color:${f.color}"></span><span>${esc(f.name)} ${f.used.toLocaleString()}${f.total ? ` / ${f.total.toLocaleString()}枚　<b style="color:${f.remain < 0 ? '#ff7b72' : '#e8eef5'}">残り ${f.remain.toLocaleString()}</b>` : '枚'}</span></div>`).join('');
-  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="small">表示中 ${n}件</div>`;
+  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="lg"><span class="sw" style="border-color:#ffd60a;background:none"></span>市区町村の境界</div><div class="small">表示中 ${n}件</div>`;
 }
 function renderNotice() {
   const b = $('#noticeBanner'); const nd = S.settings.noticeDate;

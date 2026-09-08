@@ -1,7 +1,7 @@
 /* 圏外対策：アプリの骨組みと町丁目データを端末に保存。データ（Supabase）と地図（Google）はネット必須 */
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = 'chirashi-' + VERSION;
-const SHELL = ['./', './index.html', './style.css', './app.js', './config.js', './manifest.json', './data/stations.json',
+const SHELL = ['./', './index.html', './style.css', './app.js', './config.js', './manifest.json', './data/stations.json', './data/admin_aichi.geojson',
   './data/by_city/23425_蟹江町.geojson', './data/by_city/23208_津島市.geojson', './data/by_city/23232_愛西市.geojson', './data/by_city/23237_あま市.geojson', './data/by_city/23235_弥富市.geojson', './data/by_city/23424_大治町.geojson', './data/by_city/23427_飛島村.geojson',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js', 'https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => Promise.allSettled(SHELL.map(u => c.add(u).catch(() => {})))).then(() => self.skipWaiting())); });
