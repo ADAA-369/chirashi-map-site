@@ -315,8 +315,10 @@ async function initMap() {
     navigator.geolocation.getCurrentPosition(ok, e => { if (e.code === 1) fail(e); else navigator.geolocation.getCurrentPosition(ok, fail, { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 }); }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
   };
   S.map.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(loc);
-  $('#zoomIn').onclick = () => S.map.setZoom(S.map.getZoom() + 1);
-  $('#zoomOut').onclick = () => S.map.setZoom(S.map.getZoom() - 1);
+  // ＋−は半段階ずつ（Googleの1段階＝2倍は大きすぎるため）。長押しで連続
+  const zoomBy = d => S.map.setZoom(Math.round((S.map.getZoom() + d) * 2) / 2);
+  const holdZoom = (btn, d) => { let t = null, rep = null; const start = e => { e.preventDefault(); zoomBy(d); t = setTimeout(() => { rep = setInterval(() => zoomBy(d), 220); }, 400); }; const stop = () => { clearTimeout(t); clearInterval(rep); t = rep = null; }; btn.addEventListener('pointerdown', start); btn.addEventListener('pointerup', stop); btn.addEventListener('pointercancel', stop); btn.addEventListener('pointerleave', stop); };
+  holdZoom($('#zoomIn'), 0.5); holdZoom($('#zoomOut'), -0.5);
 
   S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); });
   S.map.addListener('idle', () => {
