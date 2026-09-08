@@ -37,6 +37,11 @@ h1,h2,h3{margin:0 0 8px}
 .orderBtns{display:flex}
 .orderBtns .icon{width:30px;height:34px;font-size:13px;color:var(--muted)}
 .chip.on{color:#fff;border-color:var(--c);background:color-mix(in srgb,var(--c) 35%,#111)}
+.adminChips{padding-top:4px}
+.adminChips .chip{padding:3px 8px;font-size:11px;gap:4px}
+.adminChips .chip .dot{width:8px;height:8px}
+.adminChips .chip:not(.on){opacity:.55}
+.adminChips .chip.on{background:var(--c);border-color:#111;color:#fff;text-shadow:0 0 2px rgba(0,0,0,.6)}
 
 #searchBox{position:relative;z-index:8;background:var(--panel);border-bottom:1px solid var(--border);padding:8px}
 .searchRow{display:flex;gap:6px;align-items:center}

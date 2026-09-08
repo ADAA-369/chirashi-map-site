@@ -366,12 +366,25 @@ const ADMIN_COLORS = {
   'あま市': '#0277bd',  // 濃い水色
   '一宮市': '#c62828',  // 赤
   '稲沢市': '#1b5e20',  // 濃い緑
-  '愛西市': '#6a1b9a',  // 濃い紫
+  '愛西市': '#e91e63',  // ピンク（本人指定）
   '弥富市': '#ad1457',  // 濃いピンク（ワイン）
   '飛島村': '#00695c',  // 濃い青緑
   '津島市': '#283593',  // 濃い紺
   '大治町': '#795548',  // 濃い茶
 };
+// 表示ON/OFF（端末ごとに記憶）
+function adminOnSet() { try { const a = JSON.parse(localStorage.getItem('cm_admin_on') || 'null'); return new Set(Array.isArray(a) ? a : Object.keys(ADMIN_COLORS)); } catch { return new Set(Object.keys(ADMIN_COLORS)); } }
+function renderAdminChips() {
+  const el = $('#adminChips'); if (!el) return; const on = adminOnSet();
+  el.innerHTML = `<button class="chip ${on.size === Object.keys(ADMIN_COLORS).length ? 'on' : ''}" data-n="__all" style="--c:#555" title="全部の境界線をON/OFF"><span class="dot" style="background:#ddd"></span>境界線</button>` +
+    Object.entries(ADMIN_COLORS).map(([n, c]) => `<button class="chip ${on.has(n) ? 'on' : ''}" data-n="${esc(n)}" style="--c:${c}"><span class="dot"></span>${esc(n.replace(/(市|町|村)$/, ''))}</button>`).join('');
+  el.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+    const cur = adminOnSet(); const n = b.dataset.n;
+    if (n === '__all') { const all = Object.keys(ADMIN_COLORS); if (cur.size === all.length) cur.clear(); else all.forEach(x => cur.add(x)); }
+    else if (cur.has(n)) cur.delete(n); else cur.add(n);
+    localStorage.setItem('cm_admin_on', JSON.stringify([...cur])); renderAdminChips(); styleAdmin();
+  });
+}
 async function loadAdminLayer() {
   try {
     const gj = await fetch('data/admin_aichi.geojson').then(r => r.json());
@@ -379,14 +392,15 @@ async function loadAdminLayer() {
     const { Data } = await google.maps.importLibrary('maps');
     S.adminLayer = new Data({ map: S.map });
     S.adminLayer.addGeoJson(gj);
-    styleAdmin(); renderLegend();
+    renderAdminChips(); styleAdmin(); renderLegend();
   } catch (e) { console.warn('admin layer', e); }
 }
 function styleAdmin() {
   if (!S.adminLayer) return;
   const z = S.map.getZoom();
-  S.adminLayer.setStyle(f => { const c = ADMIN_COLORS[f.getProperty('name')] || '#ffd60a';
-    return { clickable: false, fillColor: c, fillOpacity: z >= 13 ? 0 : 0.08, strokeColor: c, strokeOpacity: 0.95, strokeWeight: z >= 15 ? 3 : z >= 12 ? 3.5 : 2.5, zIndex: 3 }; });
+  const on = adminOnSet();
+  S.adminLayer.setStyle(f => { const n = f.getProperty('name'); const c = ADMIN_COLORS[n] || '#ffd60a';
+    return { visible: on.has(n), clickable: false, fillColor: c, fillOpacity: z >= 13 ? 0 : 0.08, strokeColor: c, strokeOpacity: 0.95, strokeWeight: z >= 15 ? 3 : z >= 12 ? 3.5 : 2.5, zIndex: 3 }; });
 }
 
 /* ---------------- 町丁目 ---------------- */
