@@ -448,8 +448,8 @@ function styleAdmin() {
 // 町丁目を「学戸一〜七丁目→学戸」のようにまとめた枠。data/oaza/ は tools/build_oaza.mjs で生成
 const OAZA_BASE = DATA_BASE.replace('by_city', 'oaza');
 const OAZA_COLOR = '#ffe270';   // 色の指定がない市町村用
-// 地名を表示する市町村（端末ごと）。初期は蟹江町だけ
-function oazaCitySet() { try { const a = JSON.parse(localStorage.getItem('cm_oaza_cities') || 'null'); return new Set(Array.isArray(a) ? a : ['蟹江町']); } catch { return new Set(['蟹江町']); } }
+// 地名を表示する市町村（端末ごと）。初期は全市町村ON（2026-09-08 蟹江町で確認後に全域へ）
+function oazaCitySet() { const all = Object.keys(ADMIN_COLORS); try { const a = JSON.parse(localStorage.getItem('cm_oaza_cities') || 'null'); return new Set(Array.isArray(a) ? a : all); } catch { return new Set(all); } }
 // 地名の線色＝その市町村の境界線と同じ色（本人指定：濃い版は分かりにくい）
 const oazaColor = city => ADMIN_COLORS[city] || OAZA_COLOR;
 async function loadOaza() {
