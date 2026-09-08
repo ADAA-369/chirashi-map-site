@@ -160,6 +160,13 @@ th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--pan
 .rules{padding-left:1.3em;margin:10px 0;font-size:14px;line-height:1.5}
 .rules li{margin:6px 0}
 
+.study{padding-left:1.2em;margin:4px 0;font-size:14px;line-height:1.55}
+.study li{margin:5px 0}
+.study a{color:#7cc4ff}
+.qa{border-bottom:1px solid var(--border);padding:8px 0}
+.qa summary{cursor:pointer;font-size:14px}
+.qa div{margin:8px 0 2px 1.6em;font-size:14px;line-height:1.55;color:var(--text)}
+
 /* login */
 #login{position:absolute;inset:0;z-index:50;background:var(--bg);display:grid;place-items:center;padding:20px}
 .loginBox{width:min(92vw,380px);background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px}
