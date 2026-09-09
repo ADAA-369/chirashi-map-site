@@ -540,8 +540,11 @@ function renderOazaLabels() {
   const on = oazaCitySet();
   if (!S.map || !on.size || S.map.getZoom() < 13.5) return;
   ensureLabelClass(); const vb = viewBbox(0.15); if (!vb) return;
+  // 小さな地名（稲沢市の農村部など世帯数の少ない大字）は、拡大するまで名前を出さない（枠線は出す）
+  const z = S.map.getZoom(); const minSetai = z >= 16 ? 0 : z >= 15 ? 40 : z >= 14 ? 120 : 250;
   for (const o of S.oaza) {
     if (!on.has(o.city) || !bboxHit(vb, o.bbox)) continue;
+    if ((o.setai || 0) < minSetai) continue;
     const lb = new RecLabel(o.lab, esc(o.name), null, { cls: 'oazaLabel' });
     lb.onClick = () => showOazaInfo(o);
     lb.setMap(S.map); S.oazaLabels.push(lb);
