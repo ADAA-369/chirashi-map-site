@@ -1160,6 +1160,7 @@ function showSettings() {
     <div class="small">ここで発行したIDとパスワードだけがログインできます。停止すると、その人はすぐ使えなくなります（記録は残ります）</div>
     <div id="acctList" class="small" style="margin:6px 0">読み込み中…</div>
     <div class="rowItem acctNew"><input type="text" id="acctId" placeholder="ID（半角英数字 3〜20）" autocapitalize="off"><input type="text" id="acctNick" placeholder="表示名（例：野口）"><select id="acctRole"><option value="member">配布メンバー</option><option value="admin">管理者</option></select><button class="ghost" id="acctAdd">＋ 発行</button></div>
+    <label class="small" style="display:block;margin-top:4px">パスワードを決めて発行する場合（8文字以上。空欄なら自動で作ります）<input type="text" id="acctPw" autocapitalize="off" autocomplete="off" placeholder="例：12345678"></label>
     <h4 style="margin:18px 0 4px">配った人として選べる名前</h4>
     <div class="small">アカウントの表示名は自動で入ります。アカウントを持たない人（過去の記録用など）だけ、ここに足してください</div>` : `
     <h4 style="margin:18px 0 4px">メンバー（配る人）</h4>`}
@@ -1235,13 +1236,15 @@ async function renderAccounts() {
   el.querySelectorAll('.aDel').forEach(b => b.onclick = async () => { const m = list.find(x => x.login_id === idOf(b)); if (!confirm(`${m.nickname}（${m.login_id}）のアカウントを削除しますか？（記録は残ります。通常は「停止」で十分です）`)) return; try { await SupabaseStore.adminDeleteMember(m.login_id); toast('削除しました'); renderAccounts(); } catch (e) { toast('削除できません：' + e.message, 4000); } });
   el.querySelectorAll('.aCreate').forEach(b => b.onclick = async () => { const m = list.find(x => x.login_id === idOf(b)); const pw = tempPassword(); b.disabled = true;
     try { await SupabaseStore.createAuthUser(m.login_id, pw); showCredentials(m.login_id, pw, m.nickname); renderAccounts(); } catch (e) { toast(e.message, 5000); b.disabled = false; } });
-  el.querySelectorAll('.aPw').forEach(b => b.onclick = async () => { const m = list.find(x => x.login_id === idOf(b)); if (!confirm(`${m.nickname}（${m.login_id}）のパスワードを新しく発行しますか？（今のパスワードは使えなくなります）`)) return; const pw = tempPassword();
+  el.querySelectorAll('.aPw').forEach(b => b.onclick = async () => { const m = list.find(x => x.login_id === idOf(b)); const typed = prompt(`${m.nickname}（${m.login_id}）の新しいパスワード（8文字以上）。空のままOKなら自動で作ります。今のパスワードは使えなくなります`, ''); if (typed === null) return; if (typed && typed.length < 8) { toast('8文字以上にしてください'); return; } const pw = typed || tempPassword();
     try { await SupabaseStore.adminResetPassword(m.login_id, pw); showCredentials(m.login_id, pw, m.nickname); } catch (e) { toast('再発行できません：' + e.message, 4000); } });
   const addBtn = $('#acctAdd'); if (addBtn) addBtn.onclick = async () => {
     const id = $('#acctId').value.trim().toLowerCase(), nick = $('#acctNick').value.trim(), role = $('#acctRole').value;
     if (!/^[a-z0-9_]{3,20}$/.test(id)) { toast('IDは半角の英小文字・数字・_ で3〜20文字にしてください'); return; }
     if (!nick) { toast('表示名を入れてください'); return; }
-    addBtn.disabled = true; const pw = tempPassword();
+    const typedPw = ($('#acctPw')?.value || '').trim();
+    if (typedPw && typedPw.length < 8) { toast('パスワードは8文字以上にしてください'); return; }
+    addBtn.disabled = true; const pw = typedPw || tempPassword();
     try { await SupabaseStore.adminAddMember(id, nick, role); await SupabaseStore.createAuthUser(id, pw); $('#acctId').value = ''; $('#acctNick').value = ''; showCredentials(id, pw, nick); }
     catch (e) { toast(e.message, 5000); }
     addBtn.disabled = false; renderAccounts();
