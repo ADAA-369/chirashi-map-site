@@ -269,7 +269,7 @@ function login() {
     // 開発プレビュー用：URLの#（サーバーに送られない部分）に id=…&pw=… があれば自動ログイン
     try {
       const h = new URLSearchParams(location.hash.slice(1));
-      if (h.get('id') && h.get('pw')) { history.replaceState(null, '', location.pathname + location.search); const me = await SupabaseStore.signIn(h.get('id'), h.get('pw')); await afterSignIn(me); return resolve(); }
+      if (h.get('id') && h.get('pw')) { try { history.replaceState(null, '', location.pathname + location.search); } catch { } const me = await SupabaseStore.signIn(h.get('id'), h.get('pw')); await afterSignIn(me); return resolve(); }
     } catch (e) { console.error(e); }
     try {
       const me = await SupabaseStore.whoami();
