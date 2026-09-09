@@ -99,20 +99,59 @@ const SupabaseStore = {
     if (error) throw new Error(/not allowed|Database error/i.test(error.message) ? 'このIDは発行できません（先にメンバー登録が必要か、すでに作成済みです）' : error.message);
   },
   rowToRec(r) { return { id: r.id, group_id: r.group_id || null, member: r.member, date: r.date, flyer_id: r.flyer_id, count: r.count, memo: r.memo || '', polygon: r.polygon, est_setai: r.est_setai, town: r.town, area_m2: r.area_m2, created_at: r.created_at, updated_at: r.updated_at }; },
+  // ---- 送信待ち：電波がない時は端末に貯め、戻ったら自動で送る ----
+  outbox() { try { return JSON.parse(localStorage.getItem('cm_outbox') || '[]'); } catch { return []; } },
+  setOutbox(a) { localStorage.setItem('cm_outbox', JSON.stringify(a)); renderPending(); },
+  enqueue(t, op, row) {
+    const a = this.outbox().filter(x => !(x.t === t && x.op === op && x.row.id === row.id));
+    a.push({ t, op, row, at: new Date().toISOString() }); this.setOutbox(a);
+    toast('電波がないため「送信待ち」にしました。電波が戻ると自動で送ります', 4000);
+  },
+  async _write(t, op, row, fn) {
+    if (!navigator.onLine) { this.enqueue(t, op, row); return; }
+    let res; try { res = await fn(); } catch (e) { res = { error: e }; }
+    const error = res && res.error; if (!error) return;
+    if (isNetErr(error)) { this.enqueue(t, op, row); return; }
+    console.error(error); toast(op === 'save' ? '保存に失敗しました（通信）' : '削除に失敗しました（通信）'); throw error;
+  },
+  // 読み込んだ一覧に、送信待ちの分を重ねる（自分の端末では保存済みに見える）
+  overlay(t, list) {
+    const q = this.outbox().filter(x => x.t === t); if (!q.length) return list;
+    let out = [...list];
+    for (const x of q) {
+      if (x.op === 'del') { out = out.filter(y => y.id !== x.row.id); continue; }
+      const row = t === 'record' ? this.rowToRec(x.row) : x.row; const i = out.findIndex(y => y.id === row.id);
+      const v = { ...(i >= 0 ? out[i] : {}), ...row, _pending: true }; if (i >= 0) out[i] = v; else out.unshift(v);
+    }
+    return out;
+  },
+  async flushOutbox() {
+    if (this._flushing || !navigator.onLine) return false;
+    const q = this.outbox(); if (!q.length) return false;
+    this._flushing = true; let sent = 0;
+    try {
+      for (const x of q) {
+        const tbl = { record: 'records', board: 'boards', spot: 'spots', event: 'spot_events', assignment: 'assignments' }[x.t];
+        let res; try { res = x.op === 'del' ? await this.client.from(tbl).update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', x.row.id) : await this.client.from(tbl).upsert(x.row); } catch (e) { res = { error: e }; }
+        if (res.error && isNetErr(res.error)) break;
+        if (res.error) { console.error('outbox drop', res.error); toast('送信待ちの1件が保存できませんでした（' + (res.error.message || '') + '）', 5000); }
+        this.setOutbox(this.outbox().filter(y => !(y.t === x.t && y.op === x.op && y.row.id === x.row.id && y.at === x.at)));
+        sent++;
+      }
+    } finally { this._flushing = false; }
+    if (sent) { toast(`送信待ちの${sent}件を送りました`); this._stamp = null; }
+    return sent > 0;
+  },
   async loadRecords() {
     const { data, error } = await this.client.from('records').select('*').eq('deleted', false).order('date', { ascending: false });
-    if (error) { console.error(error); if (!this._silent) toast('読み込みに失敗しました（通信）'); return S.records || []; }
-    return data.map(r => this.rowToRec(r));
+    if (error) { console.error(error); if (!this._silent && !isNetErr(error)) toast('読み込みに失敗しました（通信）'); return this.overlay('record', S.records || []); }
+    return this.overlay('record', data.map(r => this.rowToRec(r)));
   },
   async saveRecord(r) {
     const row = { id: r.id, group_id: r.group_id || null, member: r.member, date: r.date, flyer_id: r.flyer_id, count: r.count, memo: r.memo || '', polygon: r.polygon, est_setai: r.est_setai, town: r.town, area_m2: r.area_m2, updated_at: new Date().toISOString() };
-    const { error } = await this.client.from('records').upsert(row);
-    if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; }
+    await this._write('record', 'save', row, () => this.client.from('records').upsert(row));
   },
-  async deleteRecord(id) {
-    const { error } = await this.client.from('records').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id);
-    if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; }
-  },
+  async deleteRecord(id) { await this._write('record', 'del', { id }, () => this.client.from('records').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id)); },
   async loadSettings() {
     const { data, error } = await this.client.from('settings').select('data').eq('id', 'main').maybeSingle();
     if (error) { console.error(error); throw error; }            // 既定値に化けさせない（全員の設定を消す事故の防止）
@@ -133,18 +172,14 @@ const SupabaseStore = {
   },
   async loadBoards() {
     const { data, error } = await this.client.from('boards').select('*').eq('deleted', false).order('no');
-    if (error) { console.error(error); return S.boards || []; }
-    return data;
+    if (error) { console.error(error); return this.overlay('board', S.boards || []); }
+    return this.overlay('board', data);
   },
   async saveBoard(b) {
     const row = { id: b.id, kind: b.kind || 'official', no: b.no || '', place: b.place || '', lat: b.lat, lng: b.lng, status: b.status || 'todo', posted_by: b.posted_by || null, posted_at: b.posted_at || null, photo_path: b.photo_path || null, memo: b.memo || '', updated_at: new Date().toISOString() };
-    const { error } = await this.client.from('boards').upsert(row);
-    if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; }
+    await this._write('board', 'save', row, () => this.client.from('boards').upsert(row));
   },
-  async deleteBoard(id) {
-    const { error } = await this.client.from('boards').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id);
-    if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; }
-  },
+  async deleteBoard(id) { await this._write('board', 'del', { id }, () => this.client.from('boards').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id)); },
   async uploadPhoto(blob, boardId) {
     const path = `${boardId}/${Date.now()}.jpg`;
     const { error } = await this.client.storage.from('posters').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
@@ -156,15 +191,15 @@ const SupabaseStore = {
     const { data, error } = await this.client.storage.from('posters').createSignedUrl(path, 3600);
     return error ? null : data.signedUrl;
   },
-  async loadSpots() { const { data, error } = await this.client.from('spots').select('*').eq('deleted', false).order('name'); if (error) { console.error(error); return S.spots || []; } return data; },
-  async saveSpot(x) { const { error } = await this.client.from('spots').upsert({ id: x.id, kind: x.kind || 'station', name: x.name || '', lat: x.lat, lng: x.lng, memo: x.memo || '', updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
-  async deleteSpot(id) { const { error } = await this.client.from('spots').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id); if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; } },
-  async loadAssignments() { const { data, error } = await this.client.from('assignments').select('*').eq('deleted', false).order('due', { ascending: true, nullsFirst: false }); if (error) { console.error(error); return S.assignments || []; } return data; },
-  async saveAssignment(x) { const { error } = await this.client.from('assignments').upsert({ id: x.id, member: x.member || null, flyer_id: x.flyer_id || null, polygon: x.polygon, due: x.due || null, note: x.note || '', status: x.status || 'planned', est_setai: x.est_setai ?? null, town: x.town || null, created_by: x.created_by || S.user || null, updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
-  async deleteAssignment(id) { const { error } = await this.client.from('assignments').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id); if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; } },
-  async loadEvents() { const { data, error } = await this.client.from('spot_events').select('*').eq('deleted', false).order('date'); if (error) { console.error(error); return S.events || []; } return data; },
-  async saveEvent(x) { const { error } = await this.client.from('spot_events').upsert({ id: x.id, spot_id: x.spot_id, date: x.date, time: x.time || '', member: x.member || null, memo: x.memo || '', done: !!x.done, attendees: Array.isArray(x.attendees) ? x.attendees : [], updated_at: new Date().toISOString() }); if (error) { console.error(error); toast('保存に失敗しました（通信）'); throw error; } },
-  async deleteEvent(id) { const { error } = await this.client.from('spot_events').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id); if (error) { console.error(error); toast('削除に失敗しました（通信）'); throw error; } },
+  async loadSpots() { const { data, error } = await this.client.from('spots').select('*').eq('deleted', false).order('name'); if (error) { console.error(error); return this.overlay('spot', S.spots || []); } return this.overlay('spot', data); },
+  async saveSpot(x) { const row = { id: x.id, kind: x.kind || 'station', name: x.name || '', lat: x.lat, lng: x.lng, memo: x.memo || '', updated_at: new Date().toISOString() }; await this._write('spot', 'save', row, () => this.client.from('spots').upsert(row)); },
+  async deleteSpot(id) { await this._write('spot', 'del', { id }, () => this.client.from('spots').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id)); },
+  async loadAssignments() { const { data, error } = await this.client.from('assignments').select('*').eq('deleted', false).order('due', { ascending: true, nullsFirst: false }); if (error) { console.error(error); return this.overlay('assignment', S.assignments || []); } return this.overlay('assignment', data); },
+  async saveAssignment(x) { const row = { id: x.id, member: x.member || null, flyer_id: x.flyer_id || null, polygon: x.polygon, due: x.due || null, note: x.note || '', status: x.status || 'planned', est_setai: x.est_setai ?? null, town: x.town || null, created_by: x.created_by || S.user || null, updated_at: new Date().toISOString() }; await this._write('assignment', 'save', row, () => this.client.from('assignments').upsert(row)); },
+  async deleteAssignment(id) { await this._write('assignment', 'del', { id }, () => this.client.from('assignments').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id)); },
+  async loadEvents() { const { data, error } = await this.client.from('spot_events').select('*').eq('deleted', false).order('date'); if (error) { console.error(error); return this.overlay('event', S.events || []); } return this.overlay('event', data); },
+  async saveEvent(x) { const row = { id: x.id, spot_id: x.spot_id, date: x.date, time: x.time || '', member: x.member || null, memo: x.memo || '', done: !!x.done, attendees: Array.isArray(x.attendees) ? x.attendees : [], updated_at: new Date().toISOString() }; await this._write('event', 'save', row, () => this.client.from('spot_events').upsert(row)); },
+  async deleteEvent(id) { await this._write('event', 'del', { id }, () => this.client.from('spot_events').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id)); },
   // 15秒ごと＋画面復帰時：まず軽い「更新スタンプ」だけ取り、変わった時だけ全件取得（通信量を1/100以下に）
   subscribe(cb) {
     const tick = async () => {
@@ -172,6 +207,7 @@ const SupabaseStore = {
       this._busy = true; this._silent = true;
       let payload = null;
       try {
+        await this.flushOutbox();   // 送信待ちがあれば先に送る（送れたらスタンプが変わり全件取り直す）
         const { data: stamp, error } = await this.client.rpc('sync_stamp');
         if (error || stamp === this._stamp) return;
         const all = await Promise.all([this.loadRecords(), this.loadSettings(), this.loadBoards(), this.loadSpots(), this.loadEvents(), this.loadAssignments()]);
@@ -213,6 +249,8 @@ const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(
 const fmtDate = s => { const [y, m, d] = s.split('-'); return `${m}/${d}`; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const safeColor = c => /^#[0-9a-f]{6}$/i.test(String(c || '')) ? c : '#888888';
+// 通信できない種類のエラーか（圏外・タイムアウトなど。権限エラーなどは含めない）
+const isNetErr = e => !navigator.onLine || /fetch|network|load failed|timeout|failed to/i.test(String(e?.message || e || ''));
 const flyerOf = id => { const f = S.settings.flyers.find(f => f.id === id); return f ? { ...f, color: safeColor(f.color) } : { id, name: '(削除済み)', color: '#888888' }; };
 function toast(msg, ms = 2200) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(t._t); t._t = setTimeout(() => t.hidden = true, ms); }
 
@@ -239,9 +277,14 @@ async function init() {
   await loadTowns();
   loadAdminLayer();
   loadOaza();
-  renderAll(); applyRole();
-  if (USE_SUPABASE) { try { const { data } = await SupabaseStore.client.rpc('sync_stamp'); SupabaseStore._stamp = data; } catch { } }
-  if (localStorage.getItem('cm_rules_ack') !== String(RULES_VERSION)) setTimeout(() => showRules(true), 800);
+  renderAll(); applyRole(); renderPending();
+  if (USE_SUPABASE) {
+    try { if (await SupabaseStore.flushOutbox()) await refreshAll(); } catch { }
+    try { const { data } = await SupabaseStore.client.rpc('sync_stamp'); SupabaseStore._stamp = data; } catch { }
+    window.addEventListener('online', async () => { try { if (await SupabaseStore.flushOutbox()) await refreshAll(); } catch { } });
+  }
+  setTimeout(offerDraftResume, 500);
+  if (localStorage.getItem('cm_rules_ack') !== String(RULES_VERSION)) setTimeout(() => { if ($('#sheet').hidden) showRules(true); else setTimeout(() => showRules(true), 20000); }, 800);
   setInterval(renderNotice, 60000);
   store.subscribe((recs, sets, boards, spots, events, asg) => {
     S.records = recs; if (boards) S.boards = boards; if (spots) S.spots = spots; if (events) S.events = events; if (asg) S.assignments = asg;
@@ -738,7 +781,7 @@ function renderRecords() {
     if (showLabels) {
       const c = turf.centerOfMass(recPolygon(r)).geometry.coordinates;
       const lines = list.map(x => `<span style="color:${flyerOf(x.flyer_id).color}">●</span>${esc(flyerOf(x.flyer_id).name)} <b>${x.count.toLocaleString()}</b>枚`).join('<br>');
-      const html = `<b>${fmtDate(r.date)}</b> ${esc(r.member)}<br>${lines}`;
+      const html = `${list.some(x => x._pending) ? '⏳ ' : ''}<b>${fmtDate(r.date)}</b> ${esc(r.member)}<br>${lines}`;
       const lb = new RecLabel({ lat: c[1], lng: c[0] }, html, f.color); lb.setMap(S.map); S.labels.push(lb);
     }
   } catch (e) { console.warn('bad record', k, e); } }
@@ -899,6 +942,7 @@ function redrawTap() {
     d.vMarkers.push(m);
   });
   updateTapUI();
+  if (S.drawPurpose === 'record') { if (d.ll.length) saveDraft({ stage: 'tap', ll: d.ll }); else clearDraft(); }
 }
 function updateTapUI() {
   const d = S.drawing; const n = d.ll.length;
@@ -968,6 +1012,7 @@ function startAdjust(ring, rec) {
   const path = ring.slice(0, -1).map(([lng, lat]) => ({ lat, lng }));
   const poly = new google.maps.Polygon({ paths: path, editable: true, draggable: false, strokeColor: '#00e5ff', strokeWeight: 3, fillColor: '#00e5ff', fillOpacity: 0.25, map: S.map, zIndex: 10 });
   S.adjust = { poly, rec };
+  if (!rec && S.drawPurpose === 'record') saveDraft({ stage: 'adjust', ring });
   $('#adjustBar').hidden = false; $('#fab').hidden = true; setLegend(false); $('#legendBtn').hidden = true;
   const b = turf.bbox(turf.polygon([ring]));
   S.map.fitBounds(new google.maps.LatLngBounds({ lat: b[1], lng: b[0] }, { lat: b[3], lng: b[2] }), 60);
@@ -998,9 +1043,64 @@ function endAdjust(ok) {
   } else openRecordForm({ polygon: ring });
 }
 
+/* ---------------- 下書き（書きかけの記録を端末に残し、開き直した時に続きから） ---------------- */
+const DRAFT_KEY = 'cm_draft_v1';
+function saveDraft(d) { try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...d, at: new Date().toISOString() })); } catch { } }
+function loadDraft() { try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch { return null; } }
+function clearDraft() { localStorage.removeItem(DRAFT_KEY); S.draftForm = null; }
+function formDraftValues() {
+  const lines = [...document.querySelectorAll('#flyerLines .flyerLine')].map(el => ({ flyer_id: el.querySelector('.fFlyer').value, count: el.querySelector('.fCount').value }));
+  return { lines, date: $('#fDate')?.value, member: $('#fMember')?.value, memo: $('#fMemo')?.value };
+}
+function offerDraftResume() {
+  const d = loadDraft(); if (!d || !d.stage || S.drawing || S.adjust) return;
+  const when = d.at ? new Date(d.at) : null;
+  const label = when ? `${when.getMonth() + 1}/${when.getDate()} ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}` : '';
+  const what = d.stage === 'tap' ? `範囲を描いている途中（${(d.ll || []).length}点）` : d.stage === 'adjust' ? '形を調整している途中' : '枚数などを入力している途中';
+  openSheet(`<h3>📝 書きかけの記録があります</h3><div class="small">${esc(label)}　${esc(what)}。アプリが閉じても端末に残しています</div>
+    <div class="btnRow"><button class="ghost" id="dfDrop">捨てる</button><button class="primary" id="dfGo">続きから</button></div>`);
+  $('#dfDrop').onclick = () => { clearDraft(); closeSheet(); };
+  $('#dfGo').onclick = () => { closeSheet(); resumeDraft(d); };
+}
+function resumeDraft(d) {
+  try {
+    S.drawPurpose = 'record';
+    if (d.stage === 'tap' && Array.isArray(d.ll) && d.ll.length) {
+      S.drawMode = 'tap'; S.map.panTo(d.ll[0]); startDrawing(); if (!S.drawing) return;
+      S.drawing.ll = d.ll.map(p => ({ lat: +p.lat, lng: +p.lng })); redrawTap();
+    } else if (d.stage === 'adjust' && d.ring) {
+      startAdjust(d.ring, null);
+    } else if (d.stage === 'form' && d.ring) {
+      openRecordForm({ polygon: d.ring });
+      const v = d.form;
+      if (v && $('#flyerLines')) {
+        const fl = $('#flyerLines');
+        if (v.lines?.length) {
+          while (fl.children.length < v.lines.length) $('#addLine').click();
+          while (fl.children.length > v.lines.length && fl.children.length > 1) fl.lastElementChild.remove();
+          [...fl.children].forEach((el, i) => { el.querySelector('.fFlyer').value = v.lines[i].flyer_id; el.querySelector('.fCount').value = v.lines[i].count; });
+        }
+        if (v.date) $('#fDate').value = v.date; if (v.member) $('#fMember').value = v.member; if (v.memo != null) $('#fMemo').value = v.memo;
+      }
+      const b = turf.bbox(turf.polygon([d.ring])); S.map.fitBounds(new google.maps.LatLngBounds({ lat: b[1], lng: b[0] }, { lat: b[3], lng: b[2] }), 60);
+    } else clearDraft();
+  } catch (e) { console.error(e); toast('下書きを開けませんでした'); clearDraft(); }
+}
+/* ---------------- 送信待ちの表示 ---------------- */
+function renderPending() {
+  const el = $('#pendingBar'); if (!el || !USE_SUPABASE) return;
+  const n = SupabaseStore.outbox().length; el.hidden = !n; if (!n) return;
+  el.innerHTML = `📡 送信待ち ${n}件（電波が戻ると自動で送ります）<button class="ghost small" id="pendSend">今すぐ送る</button>`;
+  $('#pendSend').onclick = async () => { const ok = await SupabaseStore.flushOutbox(); if (ok) await refreshAll(); else toast(navigator.onLine ? '送れませんでした。もう一度お試しください' : 'まだ圏外です'); };
+}
+async function refreshAll() {
+  [S.records, S.boards, S.spots, S.events, S.assignments] = await Promise.all([store.loadRecords(), store.loadBoards(), store.loadSpots(), store.loadEvents(), store.loadAssignments()]);
+  renderAll();
+}
+
 /* ---------------- ボトムシート ---------------- */
 function openSheet(html) { S.sheetGuard = null; $('#sheetBody').innerHTML = html; $('#sheet').hidden = false; }
-function userCloseSheet() { if (S.sheetGuard && !confirm(S.sheetGuard)) return; S.sheetGuard = null; closeSheet(); }
+function userCloseSheet() { if (S.sheetGuard && !confirm(S.sheetGuard)) return; if (S.sheetGuard) clearDraft(); S.sheetGuard = null; closeSheet(); }
 function closeSheet() { $('#sheet').hidden = true; }
 
 function groupOf(rec) { return rec.group_id ? S.records.filter(x => x.group_id === rec.group_id) : (rec.id ? [S.records.find(x => x.id === rec.id) || rec] : []); }
@@ -1034,9 +1134,10 @@ function openRecordForm(rec) {
     $('#flyerLines').insertAdjacentHTML('beforeend', flyerRow({ id: null, flyer_id: next.id, count: est.setai })); bindLines();
   };
   S.sheetGuard = '入力中の内容（描いた範囲）が消えます。閉じますか？';
+  if (isNew) { S.draftForm = rec.polygon; saveDraft({ stage: 'form', ring: rec.polygon, form: formDraftValues() }); }
   const locked = isLocked();
   if (locked) { $('#addLine').hidden = true; const d = new Date(S.settings.noticeDate); d.setDate(d.getDate() - 1); $('#fDate').max = d.toISOString().slice(0, 10); }
-  $('#fCancel').onclick = closeSheet;
+  $('#fCancel').onclick = () => { if (isNew && !confirm('描いた範囲と入力内容を捨てますか？')) return; clearDraft(); closeSheet(); };
   $('#fSave').onclick = async () => {
     if (locked && ($('#fDate').value >= S.settings.noticeDate || [...$('#flyerLines').querySelectorAll('.flyerLine')].some(el => !existing.some(x => x.id === el.dataset.id)))) { toast('告示日以降の配布は登録できません（公職選挙法）'); return; }
     const lines = [...$('#flyerLines').querySelectorAll('.flyerLine')].map(el => ({ id: el.dataset.id, flyer_id: el.querySelector('.fFlyer').value, count: Number(el.querySelector('.fCount').value || 0) }));
@@ -1058,7 +1159,7 @@ function openRecordForm(rec) {
     S.records = await store.loadRecords();
     for (const l of lines) if (!S.filter.flyers.has(l.flyer_id)) S.filter.flyers.add(l.flyer_id);
     if (rec.from_assignment) { const asg = S.assignments.find(x => x.id === rec.from_assignment); if (asg) { try { await store.saveAssignment({ ...asg, status: 'done' }); S.assignments = await store.loadAssignments(); } catch { } } }
-    closeSheet(); renderAll(); toast('保存しました');
+    clearDraft(); closeSheet(); renderAll(); toast(navigator.onLine ? '保存しました' : '端末に保存しました（電波が戻ると送ります）');
   };
 }
 
@@ -1076,6 +1177,7 @@ function showRecord(r, latLng) {
       <dt>推定世帯</dt><dd>${(r.est_setai ?? 0).toLocaleString()} 世帯（${esc(r.town || '')}）</dd>
       <dt>面積</dt><dd>約 ${(r.area_m2 ?? 0).toLocaleString()} ㎡</dd>
       ${r.memo ? `<dt>メモ</dt><dd>${esc(r.memo)}</dd>` : ''}
+      ${list.some(x => x._pending) ? '<dt>状態</dt><dd>⏳ 送信待ち（電波が戻ると自動で送ります）</dd>' : ''}
     </dl>
     <div class="btnRow">${isAdmin() || r.member === S.user ? '<button class="ghost" id="rDel">削除</button>' : ''}<button class="ghost" id="rShape">形を直す</button><button class="ghost" id="rEdit">編集</button><button class="primary" id="rClose">閉じる</button></div>
   `);
@@ -2141,13 +2243,14 @@ function bindUI() {
   $('#periodSel').value = S.filter.period;
   $('#periodSel').onchange = e => { S.filter.period = e.target.value; renderAll(); };
   $('#fab').onclick = startDrawing;
-  $('#btnDrawCancel').onclick = () => { S.drawPurpose = 'record'; cancelDrawing(); };
+  $('#btnDrawCancel').onclick = () => { S.drawPurpose = 'record'; cancelDrawing(); clearDraft(); };
+  $('#sheetBody').addEventListener('input', () => { if (S.draftForm) saveDraft({ stage: 'form', ring: S.draftForm, form: formDraftValues() }); });
   $('#btnDrawRedo').onclick = () => setDrawMode(S.drawing.mode);
   $('#btnDrawUndo').onclick = () => { const d = S.drawing; d.ll.pop(); redrawTap(); };
   $('#btnDrawDone').onclick = commitDrawing;
   $('#modeFree').onclick = () => setDrawMode('free');
   $('#modeTap').onclick = () => setDrawMode('tap');
-  $('#btnAdjustCancel').onclick = () => endAdjust(false);
+  $('#btnAdjustCancel').onclick = () => { endAdjust(false); clearDraft(); };
   $('#btnAdjustOk').onclick = () => endAdjust(true);
   $('#btnMenu').onclick = () => { $('#menu').hidden = false; applyRole(); };
   $('#btnMenuClose').onclick = () => $('#menu').hidden = true;

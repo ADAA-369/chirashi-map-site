@@ -67,6 +67,8 @@ h1,h2,h3{margin:0 0 8px}
 .sr .nm span{font-size:12px;color:var(--muted)}
 #noticeBanner{z-index:5;background:#3a2a06;color:#ffd777;padding:6px 12px;font-size:13px;text-align:center;border-bottom:1px solid #6b4d0a}
 #noticeBanner.lock{background:#4a1214;color:#ffb3b5;border-color:#7a1e22}
+#pendingBar{z-index:5;background:#0d3b4a;color:#9be7ff;padding:5px 12px;font-size:13px;display:flex;justify-content:center;align-items:center;gap:10px;border-bottom:1px solid #1b6b85}
+#pendingBar .ghost.small{padding:4px 10px;font-size:12px;border-radius:8px;color:#9be7ff;border-color:#1b6b85}
 
 /* map */
 #main{flex:1;display:flex;min-height:0;position:relative}
