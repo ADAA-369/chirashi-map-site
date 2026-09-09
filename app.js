@@ -365,16 +365,19 @@ async function initMap() {
 
 /* ---------------- 市区町村の境界（愛知県・国土数値情報 N03） ---------------- */
 // 表示する市区町村と色（本人指定。ここにない市町村は線を出さない）
+// 並び順は本人指定（場所が近い順）：蟹江→あま→津島→稲沢→愛西→弥富→飛島→大治
 const ADMIN_COLORS = {
   '蟹江町': '#e65100',  // 濃いオレンジ
   'あま市': '#ad1457',  // ワイン（弥富と入れ替え）
+  '津島市': '#283593',  // 濃い紺
   '稲沢市': '#1b5e20',  // 濃い緑
   '愛西市': '#e91e63',  // ピンク（本人指定）
   '弥富市': '#0277bd',  // 濃い水色（あまと入れ替え）
   '飛島村': '#00695c',  // 濃い青緑
-  '津島市': '#283593',  // 濃い紺
   '大治町': '#795548',  // 濃い茶
 };
+// 既定の並びを変えたので、古い端末側の並び順は一度リセット（2026-09-09）
+if (localStorage.getItem('cm_admin_order_v') !== '2') { localStorage.removeItem('cm_admin_order'); localStorage.setItem('cm_admin_order_v', '2'); }
 // 表示ON/OFF（端末ごとに記憶）
 function adminOnSet() { try { const a = JSON.parse(localStorage.getItem('cm_admin_on') || 'null'); return new Set(Array.isArray(a) ? a : Object.keys(ADMIN_COLORS)); } catch { return new Set(Object.keys(ADMIN_COLORS)); } }
 // 並び順（端末ごと。他の人には影響しない）
