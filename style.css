@@ -156,6 +156,20 @@ h1,h2,h3{margin:0 0 8px}
 .oazaLabel{position:absolute;transform:translate(-50%,-50%);color:#fff9d6;font-weight:900;font-size:12.5px;letter-spacing:.04em;white-space:nowrap;text-align:center;pointer-events:auto;padding:4px 6px;text-shadow:0 0 3px #000,0 0 3px #000,0 1px 2px #000,0 0 8px rgba(0,0,0,.9);user-select:none;-webkit-user-select:none}
 .spotLabel{transform:translate(-50%,-100%);font-size:12px;padding:4px 8px;border-radius:9px;background:rgba(10,16,24,.92)}
 .spotLabel::after{content:'';position:absolute;left:50%;bottom:-7px;transform:translateX(-50%);border:6px solid transparent;border-top-color:rgba(10,16,24,.92);border-bottom:0}
+/* アカウント管理（設定画面） */
+.acctTbl{width:100%;border-collapse:collapse;font-size:12px}
+.acctTbl th{text-align:left;color:var(--muted);font-weight:600;padding:4px 4px;border-bottom:1px solid var(--border)}
+.acctTbl td{padding:6px 4px;border-bottom:1px solid var(--border);vertical-align:middle}
+.acctTbl tr.off td{opacity:.55}
+.acctTbl input.aNick{width:6.5em;padding:5px 6px;font-size:12px}
+.acctTbl select{padding:5px 4px;font-size:12px}
+.acctTbl .aBtns{white-space:nowrap}
+.acctTbl .aBtns .ghost{padding:5px 7px;font-size:11px;border-radius:7px;margin:2px 2px 2px 0}
+.rowItem.acctNew{display:grid;grid-template-columns:1fr 1fr auto auto;gap:6px;margin-top:8px}
+.rowItem.acctNew input,.rowItem.acctNew select{min-width:0;padding:8px}
+.credBox{white-space:pre-wrap;word-break:break-all;background:#0b1118;border:1px solid var(--border);border-radius:10px;padding:12px;font-size:13px;line-height:1.6;user-select:all;-webkit-user-select:all}
+#loginAuth label{display:block;margin-top:10px}
+#loginAuth input{width:100%;padding:12px;font-size:16px}
 
 /* menu */
 #menu{position:absolute;inset:0 auto 0 0;width:min(84vw,340px);z-index:30;background:#111;border-right:2px solid var(--orange);display:flex;flex-direction:column;padding-top:var(--safe-top);box-shadow:0 0 40px rgba(0,0,0,.6)}

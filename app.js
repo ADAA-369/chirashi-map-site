@@ -58,16 +58,43 @@ const LocalStore = {
 };
 /* ---------------- 保存アダプタ（Supabase 共有） ---------------- */
 const SupabaseStore = {
-  client: null, pass: '', _lastJson: '', _timer: null,
-  init(pass) {
-    this.pass = pass;
-    this.client = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { global: { headers: { 'x-passphrase': pass } } });
+  client: null, _lastJson: '', _timer: null,
+  // 個人アカウント（ID＋パスワード）。IDは架空メール id@m.chirashi.local として Supabase Auth に登録される
+  EMAIL_DOMAIN: 'm.chirashi.local',
+  init() {
+    if (this.client) return;
+    this.client = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
+    this.client.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT' && S.me) { S.me = null; location.reload(); } });
   },
-  // 合言葉の検証：正しければ settings が1行返る（RLS）
-  async verify(pass) {
-    this.init(pass);
-    const { data, error } = await this.client.from('settings').select('id').eq('id', 'main');
-    return !error && Array.isArray(data) && data.length === 1;
+  emailOf(id) { return `${String(id).trim().toLowerCase()}@${this.EMAIL_DOMAIN}`; },
+  // ログイン中の本人（members 表に有効な行がある人だけ）。無ければ null
+  async whoami() {
+    const { data: { session } } = await this.client.auth.getSession();
+    if (!session) return null;
+    const { data, error } = await this.client.rpc('me');
+    if (error) { console.error(error); throw error; }
+    return Array.isArray(data) && data[0] ? data[0] : null;
+  },
+  async signIn(id, pw) {
+    const { error } = await this.client.auth.signInWithPassword({ email: this.emailOf(id), password: pw });
+    if (error) { const m = /invalid/i.test(error.message) ? 'IDかパスワードが違います' : '通信できません（' + error.message + '）'; throw new Error(m); }
+    const me = await this.whoami();
+    if (!me) { await this.client.auth.signOut(); throw new Error('このIDは停止されています。管理者に確認してください'); }
+    return me;
+  },
+  async signOut() { try { await this.client.auth.signOut(); } catch { } },
+  async changePassword(pw) { const { error } = await this.client.auth.updateUser({ password: pw }); if (error) throw new Error(error.message); },
+  // 管理者用：アカウント一覧・発行・変更
+  async listMembers() { const { data, error } = await this.client.from('members').select('login_id,nickname,role,active,auth_uid,created_at').order('created_at'); if (error) throw error; return data; },
+  async adminAddMember(id, nick, role) { const { error } = await this.client.rpc('admin_add_member', { p_login_id: id, p_nickname: nick, p_role: role || 'member' }); if (error) throw new Error(/duplicate|unique/i.test(error.message) ? 'そのIDは使われています' : error.message); },
+  async adminSetMember(id, nick, role, active) { const { error } = await this.client.rpc('admin_set_member', { p_login_id: id, p_nickname: nick, p_role: role, p_active: active }); if (error) throw new Error(error.message); },
+  async adminResetPassword(id, pw) { const { error } = await this.client.rpc('admin_reset_password', { p_login_id: id, p_password: pw }); if (error) throw new Error(error.message); },
+  async adminDeleteMember(id) { const { error } = await this.client.rpc('admin_delete_member', { p_login_id: id }); if (error) throw new Error(error.message); },
+  // アカウント本体の作成（members に行がある ID だけDB側の門番が通す）。管理者のログインを壊さないよう使い捨てクライアントで行う
+  async createAuthUser(id, pw) {
+    const tmp = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+    const { error } = await tmp.auth.signUp({ email: this.emailOf(id), password: pw });
+    if (error) throw new Error(/not allowed|Database error/i.test(error.message) ? 'このIDは発行できません（先にメンバー登録が必要か、すでに作成済みです）' : error.message);
   },
   rowToRec(r) { return { id: r.id, group_id: r.group_id || null, member: r.member, date: r.date, flyer_id: r.flyer_id, count: r.count, memo: r.memo || '', polygon: r.polygon, est_setai: r.est_setai, town: r.town, area_m2: r.area_m2, created_at: r.created_at, updated_at: r.updated_at }; },
   async loadRecords() {
@@ -175,6 +202,7 @@ const S = window.S = {
   assignments: [], asgPolys: new Map(), asgLabels: [], assignBarOn: false, drawPurpose: 'record',
   stations: [], stationMarkers: [], stationsOn: true,
   oaza: [], oazaLayer: null, oazaLabels: [],   // 地名（丁目なし）の枠とラベル
+  me: null,              // ログイン中の本人 {login_id, nickname, role}（Supabase時）
 };
 
 const $ = s => document.querySelector(s);
@@ -220,70 +248,94 @@ async function init() {
   });
 }
 
-/* ---------------- ログイン（合言葉＋名前） ---------------- */
+/* ---------------- ログイン（ID＋パスワード） ---------------- */
+async function afterSignIn(me) {
+  S.me = me; S.user = me.nickname;
+  S.settings = await store.loadSettings();
+  if (!S.settings.members.includes(me.nickname)) { try { await store.addMember(me.nickname); S.settings = await store.loadSettings(); } catch { } }
+  $('#menuUser').textContent = `👤 ${me.nickname}`;
+}
 function login() {
   return new Promise(async resolve => {
-    // 開発プレビュー用：URLの#（サーバーに送られない部分）に p=合言葉&u=名前 があれば自動ログイン
-    try { const h = new URLSearchParams(location.hash.slice(1)); if (h.get('p') && h.get('u')) { localStorage.setItem('cm_user', JSON.stringify({ name: h.get('u'), pass: h.get('p') })); history.replaceState(null, '', location.pathname + location.search); } } catch { }
-    let saved = null; try { saved = JSON.parse(localStorage.getItem('cm_user') || 'null'); } catch { }
-    if (saved?.name) {
-      try {
-        const ok = USE_SUPABASE ? await SupabaseStore.verify(saved.pass || '') : true;
-        if (ok) {
-          S.settings = await store.loadSettings();
-          if (S.settings.members.includes(saved.name)) { S.user = saved.name; $('#menuUser').textContent = `👤 ${saved.name}`; return resolve(); }
-          return showLogin(resolve, { verified: true, pass: saved.pass });
-        }
-      } catch (e) { console.error(e); toast('通信できません。電波の良い所で開き直してください', 5000); }
+    if (!USE_SUPABASE) {
+      // 端末内保存版：名前を選ぶだけ
+      let saved = null; try { saved = JSON.parse(localStorage.getItem('cm_user') || 'null'); } catch { }
+      S.settings = await store.loadSettings();
+      if (saved?.name && S.settings.members.includes(saved.name)) { S.user = saved.name; $('#menuUser').textContent = `👤 ${saved.name}`; return resolve(); }
+      return showLogin(resolve);
     }
+    SupabaseStore.init();
+    localStorage.removeItem('cm_user');   // 旧・合言葉方式の名残を消す
+    // 開発プレビュー用：URLの#（サーバーに送られない部分）に id=…&pw=… があれば自動ログイン
+    try {
+      const h = new URLSearchParams(location.hash.slice(1));
+      if (h.get('id') && h.get('pw')) { history.replaceState(null, '', location.pathname + location.search); const me = await SupabaseStore.signIn(h.get('id'), h.get('pw')); await afterSignIn(me); return resolve(); }
+    } catch (e) { console.error(e); }
+    try {
+      const me = await SupabaseStore.whoami();
+      if (me) { await afterSignIn(me); return resolve(); }
+      const { data: { session } } = await SupabaseStore.client.auth.getSession();
+      if (session) { await SupabaseStore.signOut(); toast('このIDは停止されています', 4000); }
+    } catch (e) { console.error(e); toast('通信できません。電波の良い所で開き直してください', 5000); }
     showLogin(resolve);
   });
 }
-function showLogin(resolve, opt = {}) {
-  const box = $('#login'); box.hidden = false;
-  const needPass = USE_SUPABASE && !opt.verified;
-  $('#loginPass').hidden = !needPass;
-  $('#loginMsg').textContent = needPass ? '合言葉を入れてください' : 'あなたの名前を選んでください';
-  $('#loginSub').hidden = !needPass;
-  const sel = $('#selName'); const nameWrap = sel.closest('label');
-  let verified = !needPass; if (opt.pass) $('#inpPass').value = opt.pass;
-  const fillNames = () => {
+function showLogin(resolve) {
+  const box = $('#login'); box.hidden = false; $('#loginErr').textContent = '';
+  const sel = $('#selName'); const nameWrap = $('#nameWrap');
+  $('#loginAuth').hidden = !USE_SUPABASE; $('#loginSub').hidden = !USE_SUPABASE;
+  nameWrap.hidden = USE_SUPABASE; $('#newNameWrap').hidden = true;
+  $('#loginMsg').textContent = USE_SUPABASE ? 'IDとパスワードを入れてください' : 'あなたの名前を選んでください';
+  if (!USE_SUPABASE) {
     sel.innerHTML = S.settings.members.map(m => `<option>${esc(m)}</option>`).join('') + '<option value="__new">＋ 新しい名前を追加</option>';
     sel.onchange = () => $('#newNameWrap').hidden = sel.value !== '__new';
-    nameWrap.hidden = false;
-  };
-  nameWrap.hidden = needPass; $('#newNameWrap').hidden = true;
-  if (!needPass) { (async () => { try { S.settings = S.settings || await store.loadSettings(); } catch { S.settings = S.settings || { ...DEFAULT_SETTINGS }; } fillNames(); })(); }
-  $('#btnLogin').textContent = needPass ? '次へ' : 'はじめる';
-  $('#loginErr').textContent = '';
-  $('#btnLogin').onclick = async () => {
-    const pass = $('#inpPass').value.trim();
-    if (!verified) {
-      if (!pass) { $('#loginErr').textContent = '合言葉を入れてください'; return; }
+  }
+  const submit = async () => {
+    if (USE_SUPABASE) {
+      const id = $('#inpId').value.trim().toLowerCase(), pw = $('#inpPw').value;
+      if (!id || !pw) { $('#loginErr').textContent = 'IDとパスワードを入れてください'; return; }
       $('#btnLogin').disabled = true; $('#loginErr').textContent = '確認中…';
-      const ok = await SupabaseStore.verify(pass);
-      $('#btnLogin').disabled = false;
-      if (!ok) { $('#loginErr').textContent = '合言葉が違います（または通信できません）'; return; }
-      verified = true; $('#loginErr').textContent = '';
-      try { S.settings = await store.loadSettings(); } catch { $('#loginErr').textContent = '設定を読み込めません（通信）'; verified = false; return; }
-      fillNames(); $('#inpPass').disabled = true; $('#btnLogin').textContent = 'はじめる';
-      return;
+      try { const me = await SupabaseStore.signIn(id, pw); await afterSignIn(me); }
+      catch (e) { $('#loginErr').textContent = e.message || 'ログインできません'; $('#btnLogin').disabled = false; return; }
+      $('#btnLogin').disabled = false; $('#inpPw').value = '';
+    } else {
+      let name = sel.value;
+      if (name === '__new') {
+        name = $('#inpNewName').value.trim();
+        if (!name) { $('#loginErr').textContent = '名前を入れてください'; return; }
+        const norm = x => x.replace(/[\s　]+/g, '');
+        const dup = S.settings.members.find(m => norm(m) === norm(name)); if (dup) name = dup;
+        else { await store.addMember(name); S.settings = await store.loadSettings(); }
+      }
+      S.user = name; localStorage.setItem('cm_user', JSON.stringify({ name }));
+      $('#menuUser').textContent = `👤 ${name}`;
     }
-    let name = sel.value;
-    if (name === '__new') {
-      name = $('#inpNewName').value.trim();
-      if (!name) { $('#loginErr').textContent = '名前を入れてください'; return; }
-      const norm = x => x.replace(/[\s　]+/g, '');
-      const dup = S.settings.members.find(m => norm(m) === norm(name)); if (dup) name = dup;
-      else { try { await store.addMember(name); S.settings = await store.loadSettings(); } catch { $('#loginErr').textContent = '名前を登録できませんでした（通信）'; return; } }
-    }
-    S.user = name;
-    localStorage.setItem('cm_user', JSON.stringify({ name, pass }));
-    box.hidden = true; $('#inpPass').disabled = false;
-    $('#menuUser').textContent = `👤 ${name}`; if (S.map) { applyRole(); renderAll(); }
+    box.hidden = true; if (S.map) { applyRole(); renderAll(); }
     resolve && resolve();
   };
+  $('#btnLogin').onclick = submit;
+  $('#inpPw').onkeydown = e => { if (e.key === 'Enter') submit(); };
 }
+// パスワード変更（本人）
+function showPasswordChange() {
+  openSheet(`<h3>パスワードを変える</h3>
+    <label>新しいパスワード（8文字以上）<input id="pw1" type="password" autocomplete="new-password"></label>
+    <label>もう一度<input id="pw2" type="password" autocomplete="new-password"></label>
+    <div class="btnRow"><button class="ghost" id="pwCancel">やめる</button><button class="primary" id="pwOk">変更する</button></div>
+    <p class="small">ID：${esc(S.me?.login_id || '')}　／　忘れた時は管理者に再発行を頼んでください</p>`);
+  $('#pwCancel').onclick = closeSheet;
+  $('#pwOk').onclick = async () => {
+    const a = $('#pw1').value, b = $('#pw2').value;
+    if (a.length < 8) { toast('8文字以上にしてください'); return; }
+    if (a !== b) { toast('2つのパスワードが違います'); return; }
+    $('#pwOk').disabled = true;
+    try { await SupabaseStore.changePassword(a); closeSheet(); toast('パスワードを変えました'); } catch (e) { toast('変更できません：' + e.message, 4000); $('#pwOk').disabled = false; }
+  };
+}
+// 発行用の仮パスワード（読み間違えやすい文字を除く）
+function tempPassword(n = 10) { const cs = 'abcdefghjkmnpqrstuvwxyz23456789'; const a = new Uint32Array(n); crypto.getRandomValues(a); return [...a].map(x => cs[x % cs.length]).join(''); }
+const APP_URL = 'https://adaa-369.github.io/chirashi-map-site/';
+function credentialText(id, pw, nick) { return `【チラシ配布MAP ログイン情報】\n${nick ? nick + ' さん\n' : ''}URL：${APP_URL}\nID：${id}\nパスワード：${pw}\n\n開いたらIDとパスワードを入れて「はじめる」。\n入れたら、メニュー（☰）の「パスワードを変える」で自分のパスワードに変えてください。`; }
 
 /* ---------------- Google Maps 読み込み ---------------- */
 function loadGoogleMaps() {
@@ -1103,16 +1155,23 @@ function showSettings() {
     <div class="small">色／名前／用意した枚数（入れると残り枚数が出ます）</div>
     <div id="flyerRows">${s.flyers.map(f => flyerRow(f)).join('')}</div>
     <button class="ghost" id="addFlyer" style="padding:8px 12px;border-radius:8px;margin-top:6px">＋ チラシを追加</button>
-    <h4 style="margin:18px 0 4px">メンバー（配る人）</h4>
+    ${USE_SUPABASE ? `
+    <h4 style="margin:18px 0 4px">メンバーのアカウント（ID・パスワード）</h4>
+    <div class="small">ここで発行したIDとパスワードだけがログインできます。停止すると、その人はすぐ使えなくなります（記録は残ります）</div>
+    <div id="acctList" class="small" style="margin:6px 0">読み込み中…</div>
+    <div class="rowItem acctNew"><input type="text" id="acctId" placeholder="ID（半角英数字 3〜20）" autocapitalize="off"><input type="text" id="acctNick" placeholder="表示名（例：野口）"><select id="acctRole"><option value="member">配布メンバー</option><option value="admin">管理者</option></select><button class="ghost" id="acctAdd">＋ 発行</button></div>
+    <h4 style="margin:18px 0 4px">配った人として選べる名前</h4>
+    <div class="small">アカウントの表示名は自動で入ります。アカウントを持たない人（過去の記録用など）だけ、ここに足してください</div>` : `
+    <h4 style="margin:18px 0 4px">メンバー（配る人）</h4>`}
     <label>1行に1人<textarea id="sMembers" rows="4">${esc(s.members.join('\n'))}</textarea></label>
-    <h4 style="margin:18px 0 4px">管理者</h4>
-    <label>1行に1人。空欄なら全員が設定・削除できます。入れると、その人だけが設定変更・削除・割り当て作成・一覧取り込みをできます<textarea id="sAdmins" rows="2">${esc((s.admins || []).join('\n'))}</textarea></label>
+    ${USE_SUPABASE ? '' : `<h4 style="margin:18px 0 4px">管理者</h4>
+    <label>1行に1人。空欄なら全員が設定・削除できます。入れると、その人だけが設定変更・削除・割り当て作成・一覧取り込みをできます<textarea id="sAdmins" rows="2">${esc((s.admins || []).join('\n'))}</textarea></label>`}
     <h4 style="margin:18px 0 4px">任期満了日（二連ポスターの撤去期限の計算用）</h4>
     <label>候補者名入りの政治活動用ポスターは、この日の6か月前の翌日から掲示禁止<input id="sTermEnd" type="date" value="${esc(s.termEndDate || '')}"></label>
     <h4 style="margin:18px 0 4px">告示日</h4>
     <label>この日以降は登録をロックします<input id="sNotice" type="date" value="${esc(s.noticeDate || '')}"></label>
     <div class="btnRow"><button class="ghost" id="sCancel">やめる</button><button class="primary" id="sSave">保存する</button></div>
-    <p class="small" style="margin-top:14px">${USE_SUPABASE ? 'この設定と記録は全員で共有されます（15秒ごとに自動で同期）。合言葉の変更は管理者に依頼してください。' : '端末内保存版：この設定と記録はこの端末のブラウザにだけ保存されます。'}</p>
+    <p class="small" style="margin-top:14px">${USE_SUPABASE ? 'この設定と記録は全員で共有されます（15秒ごとに自動で同期）。IDとパスワードの発行・停止は管理者だけができます。' : '端末内保存版：この設定と記録はこの端末のブラウザにだけ保存されます。'}</p>
   `);
   $('#addFlyer').onclick = () => {
     const color = PALETTE[$('#flyerRows').children.length % PALETTE.length];
@@ -1120,14 +1179,15 @@ function showSettings() {
     bindFlyerRows();
   };
   bindFlyerRows();
+  if (USE_SUPABASE) renderAccounts();
   $('#sCancel').onclick = closeSheet;
   $('#sSave').onclick = async () => {
     const flyers = [...$('#flyerRows').querySelectorAll('.rowItem')].map(r => ({ id: r.dataset.id, name: r.querySelector('input[type=text]').value.trim(), color: r.querySelector('input[type=color]').value, total: Number(r.querySelector('.totalInp').value) || 0 })).filter(f => f.name);
     if (!flyers.length) { toast('チラシを1つ以上登録してください'); return; }
     s.flyers = flyers;
     const typed = $('#sMembers').value.split('\n').map(x => x.trim()).filter(Boolean);
-    const admins = $('#sAdmins').value.split('\n').map(x => x.trim()).filter(Boolean);
-    if (admins.length && !admins.includes(S.user) && !confirm('自分（' + S.user + '）が管理者に入っていません。保存すると設定を開けなくなります。よろしいですか？')) return;
+    const admins = USE_SUPABASE ? [] : $('#sAdmins').value.split('\n').map(x => x.trim()).filter(Boolean);
+    if (!USE_SUPABASE && admins.length && !admins.includes(S.user) && !confirm('自分（' + S.user + '）が管理者に入っていません。保存すると設定を開けなくなります。よろしいですか？')) return;
     s.admins = admins;
     s.termEndDate = $('#sTermEnd').value || '';
     s.noticeDate = $('#sNotice').value;
@@ -1152,6 +1212,51 @@ function showSettings() {
   }
 }
 
+
+/* ---------------- アカウント管理（管理者・Supabase時） ---------------- */
+async function renderAccounts() {
+  const el = $('#acctList'); if (!el) return;
+  let list; try { list = await SupabaseStore.listMembers(); } catch (e) { el.textContent = '一覧を読み込めません（' + (e.message || '通信') + '）'; return; }
+  const me = S.me?.login_id;
+  el.innerHTML = `<table class="acctTbl"><tr><th>ID</th><th>表示名</th><th>権限</th><th>状態</th><th></th></tr>` + list.map(m => `<tr data-id="${esc(m.login_id)}" class="${m.active ? '' : 'off'}">
+      <td><b>${esc(m.login_id)}</b>${m.login_id === me ? '<br><span class="small">（自分）</span>' : ''}</td>
+      <td><input type="text" class="aNick" value="${esc(m.nickname)}"></td>
+      <td><select class="aRole" ${m.login_id === me ? 'disabled' : ''}><option value="member" ${m.role === 'member' ? 'selected' : ''}>配布</option><option value="admin" ${m.role === 'admin' ? 'selected' : ''}>管理者</option></select></td>
+      <td>${m.auth_uid ? (m.active ? '有効' : '停止中') : '<span style="color:#ffb454">未作成</span>'}</td>
+      <td class="aBtns">${m.auth_uid ? `<button class="ghost aPw">パスワード再発行</button>` : `<button class="ghost aCreate">パスワード発行</button>`}${m.login_id === me ? '' : `<button class="ghost aToggle">${m.active ? '停止' : '再開'}</button><button class="ghost aDel" style="color:#ff7b72">削除</button>`}</td>
+    </tr>`).join('') + '</table>';
+  const row = b => b.closest('tr'); const idOf = b => row(b).dataset.id;
+  const setMember = async (b, patch) => { const r = row(b); const m = list.find(x => x.login_id === r.dataset.id);
+    try { await SupabaseStore.adminSetMember(m.login_id, r.querySelector('.aNick').value.trim() || m.nickname, patch.role ?? r.querySelector('.aRole').value, patch.active ?? m.active); toast('変更しました'); renderAccounts(); }
+    catch (e) { toast('変更できません：' + e.message, 4000); } };
+  el.querySelectorAll('.aNick').forEach(i => i.onchange = () => setMember(i, {}));
+  el.querySelectorAll('.aRole').forEach(i => i.onchange = () => setMember(i, { role: i.value }));
+  el.querySelectorAll('.aToggle').forEach(b => b.onclick = () => { const m = list.find(x => x.login_id === idOf(b)); if (confirm(`${m.nickname}（${m.login_id}）を${m.active ? '停止' : '再開'}しますか？`)) setMember(b, { active: !m.active }); });
+  el.querySelectorAll('.aDel').forEach(b => b.onclick = async () => { const m = list.find(x => x.login_id === idOf(b)); if (!confirm(`${m.nickname}（${m.login_id}）のアカウントを削除しますか？（記録は残ります。通常は「停止」で十分です）`)) return; try { await SupabaseStore.adminDeleteMember(m.login_id); toast('削除しました'); renderAccounts(); } catch (e) { toast('削除できません：' + e.message, 4000); } });
+  el.querySelectorAll('.aCreate').forEach(b => b.onclick = async () => { const m = list.find(x => x.login_id === idOf(b)); const pw = tempPassword(); b.disabled = true;
+    try { await SupabaseStore.createAuthUser(m.login_id, pw); showCredentials(m.login_id, pw, m.nickname); renderAccounts(); } catch (e) { toast(e.message, 5000); b.disabled = false; } });
+  el.querySelectorAll('.aPw').forEach(b => b.onclick = async () => { const m = list.find(x => x.login_id === idOf(b)); if (!confirm(`${m.nickname}（${m.login_id}）のパスワードを新しく発行しますか？（今のパスワードは使えなくなります）`)) return; const pw = tempPassword();
+    try { await SupabaseStore.adminResetPassword(m.login_id, pw); showCredentials(m.login_id, pw, m.nickname); } catch (e) { toast('再発行できません：' + e.message, 4000); } });
+  const addBtn = $('#acctAdd'); if (addBtn) addBtn.onclick = async () => {
+    const id = $('#acctId').value.trim().toLowerCase(), nick = $('#acctNick').value.trim(), role = $('#acctRole').value;
+    if (!/^[a-z0-9_]{3,20}$/.test(id)) { toast('IDは半角の英小文字・数字・_ で3〜20文字にしてください'); return; }
+    if (!nick) { toast('表示名を入れてください'); return; }
+    addBtn.disabled = true; const pw = tempPassword();
+    try { await SupabaseStore.adminAddMember(id, nick, role); await SupabaseStore.createAuthUser(id, pw); $('#acctId').value = ''; $('#acctNick').value = ''; showCredentials(id, pw, nick); }
+    catch (e) { toast(e.message, 5000); }
+    addBtn.disabled = false; renderAccounts();
+  };
+}
+// 発行したID・パスワードを表示（この場でしか見られない。LINEに貼れる文面つき）
+function showCredentials(id, pw, nick) {
+  const text = credentialText(id, pw, nick);
+  $('#sheetBody').innerHTML = `<h3>発行しました</h3>
+    <div class="small" style="color:#ffb454">パスワードはこの画面を閉じると二度と表示されません。今すぐ本人に渡してください（再発行はいつでもできます）</div>
+    <pre class="credBox">${esc(text)}</pre>
+    <div class="btnRow"><button class="ghost" id="credBack">設定に戻る</button><button class="primary" id="credCopy">📋 文面をコピー</button></div>`;
+  $('#credCopy').onclick = async () => { try { await navigator.clipboard.writeText(text); toast('コピーしました。LINEなどで本人に送ってください'); } catch { toast('コピーできませんでした。長押しで選択してください'); } };
+  $('#credBack').onclick = () => { showSettings(); };
+}
 
 /* ---------------- 赤ピンで位置を合わせる（拠点・掲示場の追加／位置修正） ---------------- */
 function startPinPlace(latLng, onDone, hint) {
@@ -1892,13 +1997,16 @@ function showRules(first) {
 
 /* ---------------- 権限（管理者／現場） ---------------- */
 // 設定に admins（名前の配列）があれば、その人だけが管理者。空なら全員が管理者（初期状態）
-const isAdmin = () => { const a = S.settings?.admins || []; return !a.length || a.includes(S.user); };
+// Supabase時はアカウントの権限（members.role）、端末内保存版は設定の admins（空なら全員）
+const isAdmin = () => { if (USE_SUPABASE) return S.me?.role === 'admin'; const a = S.settings?.admins || []; return !a.length || a.includes(S.user); };
 function applyRole() {
   const admin = isAdmin();
   document.querySelector('.menuItem[data-view=settings]').hidden = !admin;
   $('#btnAssignAdd').hidden = !admin;
   $('#btnBoardImport').hidden = !admin;
-  $('#menuUser').textContent = `👤 ${S.user || ''}${admin && (S.settings?.admins || []).length ? '（管理者）' : ''}`;
+  $('#btnPassword').hidden = !USE_SUPABASE;
+  $('#btnSwitchUser').textContent = USE_SUPABASE ? '🚪 ログアウト' : '👤 名前を変える';
+  $('#menuUser').textContent = `👤 ${S.user || ''}${admin && (USE_SUPABASE || (S.settings?.admins || []).length) ? '（管理者）' : ''}`;
 }
 
 /* ---------------- 学習・資料（参政党の理念・綱領・Q&A） ---------------- */
@@ -2060,7 +2168,8 @@ function bindUI() {
   $('#btnBoardImport').onclick = openBoardImport;
   $('#btnPinCancel').onclick = () => endPinPlace(false);
   $('#btnPinOk').onclick = () => endPinPlace(true);
-  $('#btnSwitchUser').onclick = () => { $('#menu').hidden = true; let saved = null; try { saved = JSON.parse(localStorage.getItem('cm_user') || 'null'); } catch { } localStorage.removeItem('cm_user'); showLogin(null, USE_SUPABASE && saved?.pass ? { verified: true, pass: saved.pass } : {}); };
+  $('#btnSwitchUser').onclick = async () => { $('#menu').hidden = true; if (USE_SUPABASE) { if (!confirm('ログアウトしますか？（次回はIDとパスワードが必要です）')) return; S.me = null; await SupabaseStore.signOut(); location.reload(); return; } localStorage.removeItem('cm_user'); showLogin(null); };
+  $('#btnPassword').onclick = () => { $('#menu').hidden = true; showPasswordChange(); };
   $('#sheetHandle').onclick = userCloseSheet;
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheet').hidden) userCloseSheet(); });
   let _rt = null; window.addEventListener('resize', () => { clearTimeout(_rt); _rt = setTimeout(() => { renderDash(); if (S.map) google.maps.event.trigger(S.map, 'resize'); }, 200); });

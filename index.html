@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="配布MAP">
-<link rel="stylesheet" href="style.css?v=20260909100454">
+<link rel="stylesheet" href="style.css?v=20260909112402">
 </head>
 <body>
 
@@ -146,7 +146,8 @@
     <button class="menuItem" id="btnStudy">📚 学習・資料（理念・綱領・Q&amp;A）</button>
     <button class="menuItem" id="btnRules">⚠ してはいけないこと（公選法）</button>
     <button class="menuItem" data-view="settings">⚙ 設定（チラシ・メンバー・告示日・管理者）</button>
-    <button class="menuItem" id="btnSwitchUser">👤 名前を変える</button>
+    <button class="menuItem" id="btnPassword" hidden>🔑 パスワードを変える</button>
+    <button class="menuItem" id="btnSwitchUser">🚪 ログアウト</button>
     <div class="menuFoot">
       地図 © Google ／ 町丁目境界・世帯数：政府統計の総合窓口(e-Stat) 令和2年国勢調査 小地域境界データを加工
     </div>
@@ -162,24 +163,25 @@
   <div id="login" hidden>
     <div class="loginBox">
       <h1 class="brand"><span class="t1">参政党 愛知9支部</span><span class="t2">チラシ配布<em>MAP</em></span></h1>
-      <p id="loginMsg">あなたの名前を選んでください</p>
-      <p class="small" id="loginSub" hidden>合言葉は、配布のとりまとめ役から受け取ってください</p>
-      <div id="loginPass" hidden>
-        <label>合言葉<input id="inpPass" type="password" autocomplete="off"></label>
+      <p id="loginMsg">IDとパスワードを入れてください</p>
+      <div id="loginAuth">
+        <label>ID<input id="inpId" type="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+        <label>パスワード<input id="inpPw" type="password" autocomplete="current-password"></label>
       </div>
-      <label>名前<select id="selName"></select></label>
+      <label id="nameWrap" hidden>名前<select id="selName"></select></label>
       <label id="newNameWrap" hidden>新しい名前<input id="inpNewName" type="text" placeholder="例：野口"></label>
       <button id="btnLogin" class="primary">はじめる</button>
       <p class="loginErr" id="loginErr"></p>
+      <p class="small" id="loginSub">IDとパスワードは、配布のとりまとめ役（管理者）から受け取ってください。入った後にメニューからパスワードを変えられます</p>
     </div>
   </div>
 
   <div id="toast" hidden></div>
 </div>
 
-<script src="config.js?v=20260909100454"></script>
+<script src="config.js?v=20260909112402"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
-<script src="app.js?v=20260909100454"></script>
+<script src="app.js?v=20260909112402"></script>
 </body>
 </html>
