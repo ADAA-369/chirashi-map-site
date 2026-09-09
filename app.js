@@ -1368,6 +1368,76 @@ function showCredentials(id, pw, nick) {
   $('#credBack').onclick = () => { showSettings(); };
 }
 
+/* ---------------- ゴミ箱・操作履歴（管理者・Supabase時） ---------------- */
+const TRASH_TYPES = [['records', '配布記録'], ['boards', 'ポスター'], ['spots', '拠点・辻立ち'], ['spot_events', '予定・実績'], ['assignments', '割り当て']];
+const TBL_NAME = { records: '配布記録', boards: 'ポスター', spots: '拠点', spot_events: '予定', assignments: '割り当て', settings: '設定' };
+const FIELD_NAME = { count: '枚数', date: '日付', member: '担当', memo: 'メモ', flyer_id: 'チラシ', status: '状態', no: '番号', place: '場所', name: '名前', lat: '緯度', lng: '経度', posted_by: '貼った人', posted_at: '貼った日', photo_path: '写真', due: '期限', note: 'メモ', time: '時刻', done: '実施', attendees: '参加者', kind: '種類', data: '内容', est_setai: '推定世帯', town: '町名', area_m2: '面積', group_id: 'まとまり', deleted: '削除', spot_id: '場所', created_by: '作成者' };
+const fmtDT = s => { if (!s) return ''; const d = new Date(s); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+const fmtVal = v => v == null || v === '' ? '（空）' : typeof v === 'object' ? '…' : String(v).slice(0, 24);
+function itemLabel(tbl, r) {
+  r = r || {};
+  if (tbl === 'records') return `${r.date || ''} ${r.member || ''} ${r.flyer_id ? flyerOf(r.flyer_id).name : ''} ${r.count ?? ''}枚 ${r.town || ''}`;
+  if (tbl === 'boards') return `${r.no ? r.no + ' ' : ''}${r.place || ''}（${BOARD_KIND[r.kind]?.short || r.kind || ''}）`;
+  if (tbl === 'spots') return r.name || '';
+  if (tbl === 'spot_events') return `${r.date || ''} ${r.time || ''} ${S.spots.find(s => s.id === r.spot_id)?.name || ''} ${r.member || ''}`;
+  if (tbl === 'assignments') return `${r.town || ''} ${r.member || ''}${r.due ? ' 〜' + r.due : ''}`;
+  if (tbl === 'settings') return '設定';
+  return r.id || '';
+}
+async function showTrash(tbl = 'records') {
+  if (!USE_SUPABASE) { toast('端末内保存版にはゴミ箱がありません'); return; }
+  openSheet(`<h3>🗑 ゴミ箱</h3><div class="small">削除したものは消えずにここに残ります。「元に戻す」で復活します</div>
+    <div class="stTabs">${TRASH_TYPES.map(([t, n]) => `<button data-t="${t}" class="${t === tbl ? 'on' : ''}">${n}</button>`).join('')}</div>
+    <div id="trashList" class="small" style="margin-top:8px">読み込み中…</div>
+    <div class="btnRow"><button class="primary" id="trClose">閉じる</button></div>`);
+  $('#trClose').onclick = closeSheet;
+  $('#sheetBody').querySelectorAll('.stTabs button').forEach(b => b.onclick = () => showTrash(b.dataset.t));
+  const { data, error } = await SupabaseStore.client.from(tbl).select('*').eq('deleted', true).order('updated_at', { ascending: false }).limit(200);
+  const el = $('#trashList'); if (!el) return;
+  if (error) { el.textContent = '読み込めません（' + error.message + '）'; return; }
+  if (!data.length) { el.textContent = '削除されたものはありません'; return; }
+  el.innerHTML = data.map(r => `<div class="trItem" data-id="${esc(r.id)}"><span class="t">${esc(itemLabel(tbl, r))}<br><span class="small">削除 ${esc(fmtDT(r.updated_at))}</span></span><button class="ghost small trRestore">元に戻す</button></div>`).join('');
+  el.querySelectorAll('.trRestore').forEach(b => b.onclick = async () => {
+    const id = b.closest('.trItem').dataset.id; b.disabled = true;
+    const { error } = await SupabaseStore.client.from(tbl).update({ deleted: false, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) { toast('戻せませんでした：' + error.message, 4000); b.disabled = false; return; }
+    toast('元に戻しました'); await refreshAll(); showTrash(tbl);
+  });
+}
+function histSummary(x) {
+  const a = x.before || {}, b = x.after || {};
+  if (x.op === 'insert') return '追加：' + itemLabel(x.tbl, b);
+  if (x.op === 'delete') return '完全削除：' + itemLabel(x.tbl, a);
+  if (a.deleted === false && b.deleted === true) return '削除：' + itemLabel(x.tbl, a);
+  if (a.deleted === true && b.deleted === false) return '復元：' + itemLabel(x.tbl, b);
+  const skip = new Set(['updated_at', 'created_at', 'id']);
+  const diffs = Object.keys(b).filter(k => !skip.has(k) && JSON.stringify(a[k]) !== JSON.stringify(b[k])).map(k => k === 'polygon' ? '範囲を変更' : `${FIELD_NAME[k] || k} ${fmtVal(a[k])}→${fmtVal(b[k])}`);
+  return (itemLabel(x.tbl, b) + '：' + (diffs.join('、') || '変更')).slice(0, 180);
+}
+async function showHistory(actor = '') {
+  if (!USE_SUPABASE) return;
+  openSheet(`<h3>🕘 操作履歴</h3><div class="small">誰が・いつ・何を変えたか（新しい順・直近200件）。「戻す」でその変更の前の状態に戻します</div>
+    <label>人で絞る<select id="histActor"><option value="">全員</option></select></label>
+    <div id="histList" class="small" style="margin-top:8px">読み込み中…</div>
+    <div class="btnRow"><button class="primary" id="hClose">閉じる</button></div>`);
+  $('#hClose').onclick = closeSheet;
+  let q = SupabaseStore.client.from('audit_log').select('*').order('at', { ascending: false }).limit(200); if (actor) q = q.eq('actor', actor);
+  const { data, error } = await q; const el = $('#histList'); if (!el) return;
+  if (error) { el.textContent = /audit_log|relation|schema cache|does not exist/i.test(error.message) ? '操作履歴はまだ有効になっていません（データベースの更新待ち）' : '読み込めません（' + error.message + '）'; return; }
+  const sel = $('#histActor');
+  const actors = [...new Set(data.map(x => x.actor).filter(Boolean))]; if (actor && !actors.includes(actor)) actors.push(actor);
+  sel.innerHTML = '<option value="">全員</option>' + actors.map(a => `<option ${a === actor ? 'selected' : ''}>${esc(a)}</option>`).join('');
+  sel.onchange = () => showHistory(sel.value);
+  if (!data.length) { el.textContent = '履歴はまだありません'; return; }
+  el.innerHTML = data.map(x => `<div class="trItem" data-id="${x.id}"><span class="t"><span class="small">${esc(fmtDT(x.at))}</span> <b>${esc(x.actor || '?')}</b> ${esc(TBL_NAME[x.tbl] || x.tbl)}<br>${esc(histSummary(x))}</span>${x.tbl === 'settings' && x.op === 'insert' ? '' : `<button class="ghost small hUndo">戻す</button>`}</div>`).join('');
+  el.querySelectorAll('.hUndo').forEach(b => b.onclick = async () => {
+    const id = b.closest('.trItem').dataset.id; if (!confirm('この変更の前の状態に戻しますか？（戻したこと自体も履歴に残ります）')) return; b.disabled = true;
+    const { error } = await SupabaseStore.client.rpc('undo_change', { p_log_id: Number(id) });
+    if (error) { toast('戻せませんでした：' + error.message, 4000); b.disabled = false; return; }
+    toast('戻しました'); await refreshAll(); if (S.settings) { try { S.settings = await store.loadSettings(); renderAll(); } catch { } } showHistory(actor);
+  });
+}
+
 /* ---------------- 赤ピンで位置を合わせる（拠点・掲示場の追加／位置修正） ---------------- */
 function startPinPlace(latLng, onDone, hint) {
   endPinPlace(false);
@@ -2115,6 +2185,7 @@ function applyRole() {
   $('#btnAssignAdd').hidden = !admin;
   $('#btnBoardImport').hidden = !admin;
   $('#btnPassword').hidden = !USE_SUPABASE;
+  $('#btnTrash').hidden = !(admin && USE_SUPABASE); $('#btnHistory').hidden = !(admin && USE_SUPABASE);
   $('#btnSwitchUser').textContent = USE_SUPABASE ? '🚪 ログアウト' : '👤 名前を変える';
   $('#menuUser').textContent = `👤 ${S.user || ''}${admin && (USE_SUPABASE || (S.settings?.admins || []).length) ? '（管理者）' : ''}`;
 }
@@ -2281,6 +2352,8 @@ function bindUI() {
   $('#btnPinOk').onclick = () => endPinPlace(true);
   $('#btnSwitchUser').onclick = async () => { $('#menu').hidden = true; if (USE_SUPABASE) { if (!confirm('ログアウトしますか？（次回はIDとパスワードが必要です）')) return; S.me = null; await SupabaseStore.signOut(); location.reload(); return; } localStorage.removeItem('cm_user'); showLogin(null); };
   $('#btnPassword').onclick = () => { $('#menu').hidden = true; showPasswordChange(); };
+  $('#btnTrash').onclick = () => { $('#menu').hidden = true; showTrash('records'); };
+  $('#btnHistory').onclick = () => { $('#menu').hidden = true; showHistory(''); };
   $('#sheetHandle').onclick = userCloseSheet;
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheet').hidden) userCloseSheet(); });
   let _rt = null; window.addEventListener('resize', () => { clearTimeout(_rt); _rt = setTimeout(() => { renderDash(); if (S.map) google.maps.event.trigger(S.map, 'resize'); }, 200); });
