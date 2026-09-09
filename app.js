@@ -3,7 +3,9 @@
 
 const CFG = window.CHIRASHI_CONFIG || {};
 const DATA_BASE = location.pathname.includes('/app/') ? '../data/by_city/' : 'data/by_city/';
-const DEFAULT_CITIES = ['23425_蟹江町', '23208_津島市', '23232_愛西市', '23237_あま市', '23235_弥富市', '23424_大治町', '23427_飛島村'];
+const DEFAULT_CITIES = ['23425_蟹江町', '23208_津島市', '23232_愛西市', '23237_あま市', '23235_弥富市', '23424_大治町', '23427_飛島村', '23220_稲沢市'];
+// 読み込む市町村＝既定＋設定に保存された分（設定に古い一覧が残っていても、既定に足した市町村が消えないように和集合）
+const activeCities = () => [...new Set([...DEFAULT_CITIES, ...((S.settings && Array.isArray(S.settings.cities)) ? S.settings.cities : [])])];
 const PALETTE = ['#2f81f7', '#f2a93b', '#3fb950', '#c678dd', '#ff7b72', '#39c5cf', '#e3b341', '#8b949e'];
 const DEFAULT_SETTINGS = {
   flyers: [{ id: 'f1', name: '政策ビラ第1号', color: PALETTE[0] }],
@@ -511,7 +513,7 @@ const oazaColor = city => ADMIN_COLORS[city] || OAZA_COLOR;
 async function loadOaza() {
   if (!S.map) return;
   try {
-    const files = S.settings.cities || DEFAULT_CITIES;
+    const files = activeCities();
     const results = await Promise.allSettled(files.map(f => fetch(OAZA_BASE + f + '.geojson').then(r => r.json())));
     const { Data } = await google.maps.importLibrary('maps');
     S.oazaLayer = new Data({ map: S.map });
@@ -562,7 +564,7 @@ function showOazaInfo(o) {
 
 /* ---------------- 町丁目 ---------------- */
 async function loadTowns() {
-  const files = S.settings.cities || DEFAULT_CITIES;
+  const files = activeCities();
   const results = await Promise.allSettled(files.map(f => fetch(DATA_BASE + f + '.geojson').then(r => r.json())));
   for (const r of results) {
     if (r.status !== 'fulfilled') continue;
@@ -1667,7 +1669,7 @@ async function runSearch() {
   };
   addGsi(await gsi(q));
   if (!near.length) {
-    const cities = (S.settings.cities || DEFAULT_CITIES).map(c => c.split('_')[1]).filter(Boolean);
+    const cities = activeCities().map(c => c.split('_')[1]).filter(Boolean);
     for (const city of cities) {
       const d = (await gsi(`${city} ${q}`)).filter(f => { const t = f.properties.title || ''; return !t.endsWith(city) && !/^愛知県(海部郡)?[^市町村]*[市町村]$/.test(t); }); // 市町村そのものは除外
       addGsi(d, `${city}で検索`); if (near.length) break;
@@ -1851,7 +1853,7 @@ function summaryText(recs) {
 
 /* ---------------- 掲示場一覧の貼り付け取り込み ---------------- */
 function openBoardImport() {
-  const cities = (S.settings.cities || DEFAULT_CITIES).map(c => c.split('_')[1]).filter(Boolean);
+  const cities = activeCities().map(c => c.split('_')[1]).filter(Boolean);
   openSheet(`
     <h3>掲示場一覧を貼り付けて取り込む</h3>
     <div class="small">選管の一覧（PDFやExcel）から、1行に「番号　住所や目標物」の形でコピーして貼り付けてください。住所から地図の位置を自動で探します（国土地理院の無料検索）。</div>
