@@ -453,7 +453,7 @@ async function initMap() {
   mapEl.addEventListener('wheel', cancelLp, { capture: true, passive: true });
   mapEl.addEventListener('contextmenu', e => e.preventDefault());   // 長押しで「画像を保存」などのメニューを出さない
 
-  S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); });
+  S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); else if (S.searchMarker?._quick) { S.searchMarker.setMap(null); S.searchMarker = null; } });
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
     styleTowns();
@@ -1129,7 +1129,11 @@ async function refreshAll() {
 /* ---------------- ボトムシート ---------------- */
 function openSheet(html) { S.sheetGuard = null; $('#sheetBody').innerHTML = html; $('#sheet').hidden = false; }
 function userCloseSheet() { if (S.sheetGuard && !confirm(S.sheetGuard)) return; if (S.sheetGuard) clearDraft(); S.sheetGuard = null; closeSheet(); }
-function closeSheet() { $('#sheet').hidden = true; }
+function closeSheet() {
+  $('#sheet').hidden = true;
+  // 長押しで立てた赤ピンは、シートをどう閉じても消す（スマホで「閉じる」を押しても残ることがあった対策）
+  if (S.searchMarker?._quick) { S.searchMarker.setMap(null); S.searchMarker = null; }
+}
 
 function groupOf(rec) { return rec.group_id ? S.records.filter(x => x.group_id === rec.group_id) : (rec.id ? [S.records.find(x => x.id === rec.id) || rec] : []); }
 function openRecordForm(rec) {
@@ -2384,6 +2388,7 @@ function quickPin(latLng) {
   if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; }
   S.searchMarker = new google.maps.Marker({ position: latLng, map: S.map, zIndex: 50, animation: google.maps.Animation.DROP,
     icon: { path: 'M 0,0 C -2,-6 -12,-8 -12,-17 A 12,12 0 1,1 12,-17 C 12,-8 2,-6 0,0 Z', fillColor: '#e53935', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2, scale: 1.3 } });
+  S.searchMarker._quick = true;   // 長押し由来のピン（シートを閉じたら消す）
   const it = { lat: latLng.lat(), lng: latLng.lng(), name: '選んだ地点', sub: `${latLng.lat().toFixed(5)}, ${latLng.lng().toFixed(5)}` };
   let town = null;
   try { const pt = turf.point([it.lng, it.lat]); town = S.towns.find(t => bboxHit([it.lng, it.lat, it.lng, it.lat], t.bbox) && turf.booleanPointInPolygon(pt, t.feature)) || null; if (town) it.name = `${town.city} ${town.name}`; } catch { }
