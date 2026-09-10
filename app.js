@@ -2415,6 +2415,7 @@ function renderDash() {
   const myAsg = S.assignments.filter(a => a.status !== 'done' && (a.member === S.user || !a.member));
   const recent = [...S.records].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 10);
   const period = S.filter.period === 'all' ? '全期間' : `直近${S.filter.period}日`;
+  const pol = S.boards.filter(b => b.kind === 'political');
   // 掲示場の進み具合は市町村ごとに（827か所の合計だけでは分からないため）
   const cityStat = {}; for (const b of off) { const c = boardCity(b) || 'その他'; (cityStat[c] ||= [0, 0])[0]++; if (b.status === 'done') cityStat[c][1]++; }
   const byCity = [...adminOrder(), 'その他'].filter(c => cityStat[c]).map(c => [c, cityStat[c][0], cityStat[c][1]]);
