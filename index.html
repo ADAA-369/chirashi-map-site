@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="配布MAP">
-<link rel="stylesheet" href="style.css?v=20260910161951">
+<link rel="stylesheet" href="style.css?v=20260910163128">
 </head>
 <body>
 
@@ -171,6 +171,21 @@
     <div id="sheetBody"></div>
   </div>
 
+  <!-- 起動中の表示（開けない時の自己復旧ボタン付き） -->
+  <div id="boot">
+    <div class="bootBox">
+      <div class="spin"></div>
+      <div>読み込み中…</div>
+      <button id="bootReset" class="ghost" hidden>開けない時はここを押す<br><span class="small">保存したページを整理して開き直します（記録は消えません）</span></button>
+    </div>
+  </div>
+  <script>
+    setTimeout(function () { var b = document.getElementById('bootReset'), o = document.getElementById('boot'); if (b && o && !o.hidden) b.hidden = false; }, 8000);
+    document.getElementById('bootReset').onclick = async function () {
+      try { if (navigator.serviceWorker) { var rs = await navigator.serviceWorker.getRegistrations(); for (var r of rs) await r.unregister(); } if (window.caches) { for (var k of await caches.keys()) await caches.delete(k); } } catch (e) { }
+      location.replace(location.pathname + '?reset=' + Date.now());
+    };
+  </script>
   <!-- ログイン -->
   <div id="login" hidden>
     <div class="loginBox">
@@ -191,9 +206,9 @@
   <div id="toast" hidden></div>
 </div>
 
-<script src="config.js?v=20260910161951"></script>
+<script src="config.js?v=20260910163128"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
-<script src="app.js?v=20260910161951"></script>
+<script src="app.js?v=20260910163128"></script>
 </body>
 </html>

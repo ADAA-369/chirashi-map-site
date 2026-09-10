@@ -1,5 +1,7 @@
 /* 圏外対策：アプリの骨組みと町丁目データを端末に保存。データ（Supabase）と地図（Google）はネット必須 */
-const VERSION = 'v5';
+const VERSION = 'v6';
+// ネットが遅い時に「ずっと読み込み中」にならないよう、骨組みは4秒で見切ってキャッシュを使う
+const netWithTimeout = (req, ms) => Promise.race([fetch(req), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
 const CACHE = 'chirashi-' + VERSION;
 const SHELL = ['./', './index.html', './style.css', './app.js', './config.js', './manifest.json', './data/stations.json', './data/admin_aichi.geojson',
   './data/by_city/23425_蟹江町.geojson', './data/by_city/23208_津島市.geojson', './data/by_city/23232_愛西市.geojson', './data/by_city/23237_あま市.geojson', './data/by_city/23235_弥富市.geojson', './data/by_city/23424_大治町.geojson', './data/by_city/23427_飛島村.geojson', './data/by_city/23220_稲沢市.geojson',
@@ -18,5 +20,5 @@ self.addEventListener('fetch', e => {
     return;
   }
   // 骨組み：ネット優先、失敗したらキャッシュ（?v= の違いは無視）
-  e.respondWith(fetch(e.request).then(r => { if (r.ok) caches.open(CACHE).then(c => c.put(e.request, r.clone())); return r; }).catch(async () => (await caches.match(e.request, { ignoreSearch: true })) || (e.request.mode === 'navigate' ? caches.match('./index.html', { ignoreSearch: true }) : Response.error())));
+  e.respondWith(netWithTimeout(e.request, 4000).then(r => { if (r.ok) caches.open(CACHE).then(c => c.put(e.request, r.clone())); return r; }).catch(async () => (await caches.match(e.request, { ignoreSearch: true })) || (e.request.mode === 'navigate' ? caches.match('./index.html', { ignoreSearch: true }) : fetch(e.request))));
 });

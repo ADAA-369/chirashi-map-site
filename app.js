@@ -270,7 +270,8 @@ window.addEventListener('unhandledrejection', e => { console.error(e.reason); to
 
 async function init() {
   bindUI();
-  await login();                       // 合言葉の検証と名前の選択（設定はこの中で読み込む）
+  await login();                       // ID・パスワードの確認（設定はこの中で読み込む）
+  const boot = $('#boot'); if (boot) boot.hidden = true;
   [S.records, S.boards, S.spots, S.events, S.assignments] = await Promise.all([store.loadRecords(), store.loadBoards(), store.loadSpots(), store.loadEvents(), store.loadAssignments()]);
   fetch('data/stations.json').then(r => r.json()).then(d => { S.stations = d; renderStations(); }).catch(() => {});
   S.filter.flyers = new Set(S.settings.flyers.map(f => f.id));
@@ -317,21 +318,24 @@ function login() {
     }
     SupabaseStore.init();
     localStorage.removeItem('cm_user');   // 旧・合言葉方式の名残を消す
+    // 通信が返ってこない時に「ずっと読み込み中」にならないよう、待ち時間に上限を付ける
+    const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
     // 開発プレビュー用：URLの#（サーバーに送られない部分）に id=…&pw=… があれば自動ログイン
     try {
       const h = new URLSearchParams(location.hash.slice(1));
-      if (h.get('id') && h.get('pw')) { try { history.replaceState(null, '', location.pathname + location.search); } catch { } const me = await SupabaseStore.signIn(h.get('id'), h.get('pw')); await afterSignIn(me); return resolve(); }
+      if (h.get('id') && h.get('pw')) { try { history.replaceState(null, '', location.pathname + location.search); } catch { } const me = await withTimeout(SupabaseStore.signIn(h.get('id'), h.get('pw')), 12000); await afterSignIn(me); return resolve(); }
     } catch (e) { console.error(e); }
     try {
-      const me = await SupabaseStore.whoami();
-      if (me) { await afterSignIn(me); return resolve(); }
-      const { data: { session } } = await SupabaseStore.client.auth.getSession();
+      const me = await withTimeout(SupabaseStore.whoami(), 8000);
+      if (me) { await withTimeout(afterSignIn(me), 10000); return resolve(); }
+      const { data: { session } } = await withTimeout(SupabaseStore.client.auth.getSession(), 5000);
       if (session) { await SupabaseStore.signOut(); toast('このIDは停止されています', 4000); }
-    } catch (e) { console.error(e); toast('通信できません。電波の良い所で開き直してください', 5000); }
+    } catch (e) { console.error(e); toast(e && e.message === 'timeout' ? '通信が遅いため、ログイン画面に戻しました。電波の良い所でもう一度お試しください' : '通信できません。電波の良い所で開き直してください', 6000); }
     showLogin(resolve);
   });
 }
 function showLogin(resolve) {
+  const boot = $('#boot'); if (boot) boot.hidden = true;
   const box = $('#login'); box.hidden = false; $('#loginErr').textContent = '';
   const sel = $('#selName'); const nameWrap = $('#nameWrap');
   $('#loginAuth').hidden = !USE_SUPABASE; $('#loginSub').hidden = !USE_SUPABASE;
@@ -456,8 +460,7 @@ async function initMap() {
   S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); else if (S.searchMarker?._quick) { S.searchMarker.setMap(null); S.searchMarker = null; } });
   S.map.addListener('idle', () => {
     const c = S.map.getCenter(); localView.set({ center: { lat: c.lat(), lng: c.lng() }, zoom: S.map.getZoom() });
-    styleTowns();
-    const z = S.map.getZoom();
+    const z = S.map.getZoom();   // 町丁目の線の描き直しは拡大率の段が変わった時だけ（毎回やるとスマホが重い）
     const band = z >= 16 ? 4 : z >= 15 ? 3 : z >= 14 ? 2 : z >= 13 ? 1 : 0;
     clearTimeout(S._idleT); S._idleT = setTimeout(() => {
       if (S.drawing || S.adjust) return;
@@ -601,15 +604,17 @@ function styleOaza() {
 }
 // 地名ラベル：表示範囲内だけ描く。タップで地名全体の配布率
 function renderOazaLabels() {
-  for (const l of S.oazaLabels) l.setMap(null); S.oazaLabels = [];
   const on = oazaCitySet();
-  if (!S.map || !on.size || S.map.getZoom() < 13.5) return;
-  ensureLabelClass(); const vb = viewBbox(0.15); if (!vb) return;
+  const clear = () => { for (const l of S.oazaLabels) l.setMap(null); S.oazaLabels = []; S._oazaKey = ''; };
+  if (!S.map || !on.size || S.map.getZoom() < 13.5) { clear(); return; }
+  ensureLabelClass(); const vb = viewBbox(0.15); if (!vb) { clear(); return; }
   // 小さな地名（稲沢市の農村部など世帯数の少ない大字）は、拡大するまで名前を出さない（枠線は出す）
   const z = S.map.getZoom(); const minSetai = z >= 16 ? 0 : z >= 15 ? 40 : z >= 14 ? 120 : 250;
-  for (const o of S.oaza) {
-    if (!on.has(o.city) || !bboxHit(vb, o.bbox)) continue;
-    if ((o.setai || 0) < minSetai) continue;
+  const show = S.oaza.filter(o => on.has(o.city) && bboxHit(vb, o.bbox) && (o.setai || 0) >= minSetai);
+  const key = show.map(o => o.feature.id).join(',');
+  if (key === S._oazaKey && S.oazaLabels.length === show.length) return;   // 同じなら描き直さない
+  clear(); S._oazaKey = key;
+  for (const o of show) {
     const lb = new RecLabel(o.lab, esc(o.name), null, { cls: 'oazaLabel' });
     lb.onClick = () => showOazaInfo(o);
     lb.setMap(S.map); S.oazaLabels.push(lb);
@@ -1646,8 +1651,6 @@ function setBoardAdding(on) {
   setAddingUI(on);
 }
 function renderBoards() {
-  for (const m of S.boardMarkers.values()) m.setMap(null);
-  S.boardMarkers.clear();
   const off = S.boards.filter(b => (b.kind || 'official') === 'official'), gen = S.boards.filter(b => b.kind === 'general'), pol = S.boards.filter(b => b.kind === 'political');
   const cnt = a => { const d = a.filter(b => b.status === 'done').length; return `${d}/${a.length}${a.length ? `（${Math.round(d / a.length * 100)}%）` : ''}`; };
   const bad = S.boards.filter(b => b.status === 'damaged' || b.status === 'check').length;
@@ -1660,12 +1663,23 @@ function renderBoards() {
   // 掲示場モード外（チップ表示）では、引いた地図で邪魔にならないよう小さく描く
   // 掲示場モード中も拡大率に合わせて小さく（大きすぎて範囲を囲めない、という指摘に対応）
   const z = S.map.getZoom(); const iconScale = z >= 17 ? 1 : z >= 16 ? 0.85 : z >= 15 ? 0.7 : z >= 14 ? 0.55 : 0.45;
+  // まず「今回描くもの」を決め、前回と同じなら描き直さない（ピンチ操作のたびに数百個のピンを作り直してスマホが固まるのを防ぐ）
+  const show = [];
   for (const b of S.boards) {
     const kind = b.kind || 'official';
     const inMode = S.boardsOn && (S.boardKindFilter === 'all' || kind === S.boardKindFilter);
     const inChip = kind === 'official' && chipOn.has(boardCity(b) || '__none');
     if (!inMode && !inChip) continue;
     if (vb && !bboxHit([b.lng, b.lat, b.lng, b.lat], vb)) continue;
+    show.push(b);
+  }
+  const key = `${iconScale}|${S.boardsOn}|${overlaysClickable()}|` + show.map(b => `${b.id}:${b.status}:${b.lat}:${b.lng}:${b.no}`).join(',');
+  if (key === S._boardKey && S.boardMarkers.size === show.length) return;
+  S._boardKey = key;
+  for (const m of S.boardMarkers.values()) m.setMap(null);
+  S.boardMarkers.clear();
+  for (const b of show) {
+    const kind = b.kind || 'official';
     const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
     // 公営掲示場は市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）。状態は印で表す
     // 公営掲示場：貼ったら緑、まだなら市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）
