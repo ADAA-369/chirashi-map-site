@@ -837,20 +837,25 @@ function normalizeSettings(d) {
 }
 function renderChips() {
   const el = $('#flyerChips');
-  el.innerHTML = chipFlyers().map(f => `<button class="chip ${S.filter.flyers.has(f.id) ? 'on' : ''}" data-id="${esc(f.id)}" style="--c:${safeColor(f.color)}" draggable="true" title="ドラッグで並べ替え"><span class="dot"></span>${esc(f.name)}</button>`).join('');
+  const list = chipFlyers(); const allOn = list.length > 0 && list.every(f => S.filter.flyers.has(f.id));
+  // 先頭の「チラシ」は全部まとめてON/OFF（境界線・地名・掲示板の段と同じ作法）
+  el.innerHTML = `<button class="chip ${allOn ? 'on' : ''}" data-id="__all" style="--c:#555" title="全部のチラシをON/OFF"><span class="dot" style="background:#ddd"></span>チラシ</button>` +
+    list.map(f => `<button class="chip ${S.filter.flyers.has(f.id) ? 'on' : ''}" data-id="${esc(f.id)}" style="--c:${safeColor(f.color)}" draggable="true" title="ドラッグで並べ替え"><span class="dot"></span>${esc(f.name)}</button>`).join('');
   el.querySelectorAll('.chip').forEach(c => {
     c.onclick = () => {
       const id = c.dataset.id; S._userToggled = true;
+      if (id === '__all') { if (allOn) S.filter.flyers.clear(); else list.forEach(f => S.filter.flyers.add(f.id)); renderAll(); return; }
       if (S.filter.flyers.has(id)) S.filter.flyers.delete(id); else S.filter.flyers.add(id);
       renderAll();
     };
+    if (c.dataset.id === '__all') return;
     c.ondragstart = e => { e.dataTransfer.setData('text/plain', c.dataset.id); e.dataTransfer.effectAllowed = 'move'; c.classList.add('dragging'); };
     c.ondragend = () => c.classList.remove('dragging');
     c.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; c.classList.add('dragOver'); };
     c.ondragleave = () => c.classList.remove('dragOver');
     c.ondrop = async e => {
       e.preventDefault(); c.classList.remove('dragOver'); if (!isAdmin()) return;
-      const from = e.dataTransfer.getData('text/plain'), to = c.dataset.id; if (!from || from === to) return;
+      const from = e.dataTransfer.getData('text/plain'), to = c.dataset.id; if (!from || from === to || from === '__all' || to === '__all') return;
       const arr = S.settings.flyers; const fi = arr.findIndex(f => f.id === from), ti = arr.findIndex(f => f.id === to);
       if (fi < 0 || ti < 0) return;
       const [m] = arr.splice(fi, 1); arr.splice(ti, 0, m);

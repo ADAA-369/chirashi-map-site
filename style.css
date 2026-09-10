@@ -48,6 +48,7 @@ h1,h2,h3{margin:0 0 8px}
 .flyerChips .chip .dot{width:8px;height:8px}
 /* 2段目と3段目の間を空けて押し間違いを防ぐ */
 .boardChips{padding-top:9px;margin-top:5px;border-top:1px dashed rgba(0,0,0,.28)}
+#adminChips{padding-top:9px;margin-top:5px;border-top:1px dashed rgba(0,0,0,.28)}
 #layerPanel{padding-top:2px}
 #btnLayers.on{background:rgba(0,0,0,.18);border-radius:8px}
 .boardChips .chip.on{background:#111;border-color:var(--c);color:#fff}
