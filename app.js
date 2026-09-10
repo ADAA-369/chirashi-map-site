@@ -1470,6 +1470,69 @@ async function showHistory(actor = '') {
   });
 }
 
+/* ---------------- 全データの書き出し・読み込み（バックアップ／別の場所への移植） ---------------- */
+const BACKUP_TABLES = ['records', 'boards', 'spots', 'spot_events', 'assignments'];
+const TABLE_JA = { records: '配布記録', boards: 'ポスター掲示場', spots: '拠点・辻立ち', spot_events: '予定・実績', assignments: '割り当て' };
+async function collectAll() {
+  const out = { app: 'chirashi-map', version: 1, exported_at: new Date().toISOString(), exported_by: S.user || '', settings: S.settings };
+  if (USE_SUPABASE) {
+    for (const t of BACKUP_TABLES) {   // 削除済み（ゴミ箱）も含めて全部（1,000件ずつ）
+      const rows = []; for (let from = 0; ; from += 1000) { const { data, error } = await SupabaseStore.client.from(t).select('*').order('id').range(from, from + 999); if (error) throw new Error(t + ': ' + error.message); rows.push(...(data || [])); if (!data || data.length < 1000) break; }
+      out[t] = rows;
+    }
+    try { out.members = (await SupabaseStore.listMembers()).map(m => ({ login_id: m.login_id, nickname: m.nickname, role: m.role, active: m.active })); } catch { }
+  } else {
+    out.records = await store.loadRecords(); out.boards = await store.loadBoards(); out.spots = await store.loadSpots(); out.spot_events = await store.loadEvents(); out.assignments = await store.loadAssignments();
+  }
+  return out;
+}
+const ymd = () => today().replace(/-/g, '');
+function toCsv(rows, cols) { return '﻿' + [cols, ...rows.map(r => cols.map(c => r[c] == null ? '' : typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c]))].map(a => a.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n'); }
+function boardsKml(boards) {
+  const pm = boards.filter(b => typeof b.lat === 'number' && !b.deleted).map(b => `<Placemark><name>${esc(String(b.no || ''))} ${esc(b.place || '')}</name><description>${esc(`${BOARD_KIND[b.kind || 'official']?.name || ''}\n状態：${b.status === 'done' ? '貼った' : 'まだ'}\n${(b.memo || '')}`)}</description><Point><coordinates>${b.lng},${b.lat},0</coordinates></Point></Placemark>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>ポスター掲示場 ${ymd()}</name>${pm}</Document></kml>`;
+}
+function showBackup() {
+  openSheet(`<h3>💾 全データの書き出し・読み込み</h3>
+    <div class="small">書き出したファイルは、URLや保存先が変わっても「読み込み」でそのまま移せます。写真は含みません（写真は毎晩のバックアップとは別に、必要なら個別に保存してください）</div>
+    <h4 style="margin:12px 0 4px">書き出し（バックアップ）</h4>
+    <div class="btnRow"><button class="primary" id="bkJson">📦 全部まとめて（JSON）</button></div>
+    <div class="btnRow"><button class="ghost" id="bkCsvRec">配布記録 CSV</button><button class="ghost" id="bkCsvBoard">掲示場 CSV</button><button class="ghost" id="bkKml">掲示場 KML（Googleマップ用）</button></div>
+    <h4 style="margin:16px 0 4px">読み込み（移植・復元）</h4>
+    <div class="small">上の「全部まとめて（JSON）」で作ったファイルを選びます。同じIDのものは上書き、無いものは追加されます。消えるものはありません</div>
+    <label class="ghost fileBtn" style="display:inline-block;margin-top:6px">📂 JSONファイルを選ぶ<input id="bkFile" type="file" accept=".json,application/json" hidden></label>
+    <div id="bkResult" class="small" style="margin-top:8px"></div>
+    <div class="btnRow"><button class="ghost" id="bkClose">閉じる</button></div>`);
+  $('#bkClose').onclick = closeSheet;
+  const busy = (b, on) => { b.disabled = on; };
+  $('#bkJson').onclick = async () => { const b = $('#bkJson'); busy(b, true); try { const all = await collectAll(); const n = BACKUP_TABLES.map(t => `${TABLE_JA[t]} ${(all[t] || []).length}件`).join('・'); await downloadOrShare(`chirashi-map-backup-${ymd()}.json`, JSON.stringify(all, null, 1), 'application/json'); toast('書き出しました：' + n, 5000); } catch (e) { toast('書き出しに失敗：' + e.message, 5000); } busy(b, false); };
+  $('#bkCsvRec').onclick = async () => { const all = await collectAll(); const recs = (all.records || []).filter(r => !r.deleted).map(r => ({ ...r, チラシ名: flyerOf(r.flyer_id).name })); await downloadOrShare(`配布記録-${ymd()}.csv`, toCsv(recs, ['id', 'date', 'member', 'flyer_id', 'チラシ名', 'count', 'est_setai', 'town', 'area_m2', 'memo', 'group_id', 'created_at', 'updated_at', 'polygon']), 'text/csv'); };
+  $('#bkCsvBoard').onclick = async () => { const all = await collectAll(); const rows = (all.boards || []).filter(b => !b.deleted); await downloadOrShare(`掲示場-${ymd()}.csv`, toCsv(rows, ['id', 'kind', 'no', 'place', 'lat', 'lng', 'status', 'posted_by', 'posted_at', 'photo_path', 'memo', 'created_at', 'updated_at']), 'text/csv'); };
+  $('#bkKml').onclick = async () => { const all = await collectAll(); await downloadOrShare(`掲示場-${ymd()}.kml`, boardsKml(all.boards || []), 'application/vnd.google-earth.kml+xml'); };
+  $('#bkFile').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return; const res = $('#bkResult');
+    let d; try { d = JSON.parse(await f.text()); } catch { res.textContent = 'JSONとして読めません'; return; }
+    if (d.app !== 'chirashi-map') { res.textContent = 'このアプリの書き出しファイルではありません'; return; }
+    const counts = BACKUP_TABLES.map(t => `${TABLE_JA[t]} ${(d[t] || []).length}件`).join('、');
+    if (!confirm(`${d.exported_at ? d.exported_at.slice(0, 10) + ' に書き出されたデータ' : 'データ'}を読み込みます。\n${counts}\n設定（チラシの種類・メンバー名など）も上書きします。よろしいですか？`)) { e.target.value = ''; return; }
+    res.textContent = '読み込み中…';
+    try {
+      if (USE_SUPABASE) {
+        for (const t of BACKUP_TABLES) { const rows = (d[t] || []).map(r => { const { _pending, ...x } = r; return x; }); for (let i = 0; i < rows.length; i += 200) { const { error } = await SupabaseStore.client.from(t).upsert(rows.slice(i, i + 200)); if (error) throw new Error(t + ': ' + error.message); } }
+        if (d.settings) await store.saveSettings(normalizeSettings(d.settings));
+      } else {
+        localStorage.setItem(LocalStore.key, JSON.stringify(d.records || [])); localStorage.setItem(LocalStore.bkey, JSON.stringify(d.boards || []));
+        LocalStore._s('cm_spots_v1', d.spots || []); LocalStore._s('cm_events_v1', d.spot_events || []); LocalStore._s('cm_assign_v1', d.assignments || []);
+        if (d.settings) await store.saveSettings(normalizeSettings(d.settings));
+      }
+      S.settings = await store.loadSettings(); await refreshAll();
+      res.textContent = '読み込みました：' + counts + (d.members ? '。メンバーのアカウントは含まれないので、設定画面で発行し直してください' : '');
+      toast('読み込みました');
+    } catch (err) { res.textContent = '読み込みに失敗：' + err.message; }
+    e.target.value = '';
+  };
+}
+
 /* ---------------- 赤ピンで位置を合わせる（拠点・掲示場の追加／位置修正） ---------------- */
 function startPinPlace(latLng, onDone, hint) {
   endPinPlace(false);
@@ -2332,6 +2395,7 @@ function applyRole() {
   const q = id => $(id) || {};   // 古いページが残っていて要素が無くても落ちないように
   q('#btnPassword').hidden = !USE_SUPABASE;
   q('#btnTrash').hidden = !(admin && USE_SUPABASE); q('#btnHistory').hidden = !(admin && USE_SUPABASE);
+  q('#btnBackup').hidden = !admin;
   q('#btnSwitchUser').textContent = USE_SUPABASE ? '🚪 ログアウト' : '👤 名前を変える';
   $('#menuUser').textContent = `👤 ${S.user || ''}${admin && (USE_SUPABASE || (S.settings?.admins || []).length) ? '（管理者）' : ''}`;
 }
@@ -2524,6 +2588,7 @@ function bindUI() {
   if ($('#btnPassword')) $('#btnPassword').onclick = () => { $('#menu').hidden = true; showPasswordChange(); };
   if ($('#btnTrash')) $('#btnTrash').onclick = () => { $('#menu').hidden = true; showTrash('records'); };
   if ($('#btnHistory')) $('#btnHistory').onclick = () => { $('#menu').hidden = true; showHistory(''); };
+  if ($('#btnBackup')) $('#btnBackup').onclick = () => { $('#menu').hidden = true; showBackup(); };
   $('#sheetHandle').onclick = userCloseSheet;
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheet').hidden) userCloseSheet(); });
   let _rt = null; window.addEventListener('resize', () => { clearTimeout(_rt); _rt = setTimeout(() => { renderDash(); if (S.map) google.maps.event.trigger(S.map, 'resize'); }, 200); });
