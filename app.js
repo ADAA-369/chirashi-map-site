@@ -1299,16 +1299,19 @@ function showSettings() {
     <div class="small">色／名前／用意した枚数（入れると残り枚数が出ます）</div>
     <div id="flyerRows">${s.flyers.map(f => flyerRow(f)).join('')}</div>
     <button class="ghost" id="addFlyer" style="padding:8px 12px;border-radius:8px;margin-top:6px">＋ チラシを追加</button>
-    ${USE_SUPABASE ? `
-    <h4 style="margin:18px 0 4px">メンバーのアカウント（ID・パスワード）</h4>
+    ${USE_SUPABASE && isAdmin() ? `
+    <h4 style="margin:18px 0 4px">メンバーのアカウント（ID・パスワード）<span class="small" style="font-weight:400">　管理者のみ</span></h4>
     <div class="small">ここで発行したIDとパスワードだけがログインできます。停止すると、その人はすぐ使えなくなります（記録は残ります）</div>
     <div id="acctList" class="small" style="margin:6px 0">読み込み中…</div>
     <div class="rowItem acctNew"><input type="text" id="acctId" placeholder="ID（半角英数字 3〜20）" autocapitalize="off"><input type="text" id="acctNick" placeholder="表示名（例：野口）"><select id="acctRole"><option value="member">配布メンバー</option><option value="admin">管理者</option></select><button class="ghost" id="acctAdd">＋ 発行</button></div>
     <label class="small" style="display:block;margin-top:4px">パスワードを決めて発行する場合（8文字以上。空欄なら自動で作ります）<input type="text" id="acctPw" autocapitalize="off" autocomplete="off" placeholder="例：12345678"></label>
-    <h4 style="margin:18px 0 4px">配った人として選べる名前</h4>
-    <div class="small">アカウントの表示名は自動で入ります。アカウントを持たない人（過去の記録用など）だけ、ここに足してください</div>` : `
+    <h4 style="margin:18px 0 4px">配った人として選べる名前<span class="small" style="font-weight:400">　管理者のみ</span></h4>
+    <div class="small">アカウントの表示名は自動で入ります。アカウントを持たない人（過去の記録用など）だけ、ここに足してください</div>` : USE_SUPABASE ? `
+    <h4 style="margin:18px 0 4px">メンバーのアカウント<span class="small" style="font-weight:400">　発行・停止・パスワード再発行は管理者だけができます</span></h4>
+    <div id="acctList" class="small" style="margin:6px 0">読み込み中…</div>
+    <h4 style="margin:18px 0 4px">配った人として選べる名前<span class="small" style="font-weight:400">　変更は管理者に依頼</span></h4>` : `
     <h4 style="margin:18px 0 4px">メンバー（配る人）</h4>`}
-    <label>1行に1人<textarea id="sMembers" rows="4">${esc(s.members.join('\n'))}</textarea></label>
+    <label>1行に1人<textarea id="sMembers" rows="4" ${USE_SUPABASE && !isAdmin() ? 'readonly style="opacity:.6"' : ''}>${esc(s.members.join('\n'))}</textarea></label>
     ${USE_SUPABASE ? '' : `<h4 style="margin:18px 0 4px">管理者</h4>
     <label>1行に1人。空欄なら全員が設定・削除できます。入れると、その人だけが設定変更・削除・割り当て作成・一覧取り込みをできます<textarea id="sAdmins" rows="2">${esc((s.admins || []).join('\n'))}</textarea></label>`}
     <h4 style="margin:18px 0 4px">任期満了日（二連ポスターの撤去期限の計算用）</h4>
@@ -1330,7 +1333,8 @@ function showSettings() {
     const flyers = [...$('#flyerRows').querySelectorAll('.rowItem')].map(r => ({ id: r.dataset.id, name: r.querySelector('input[type=text]').value.trim(), color: r.querySelector('input[type=color]').value, total: Number(r.querySelector('.totalInp').value) || 0 })).filter(f => f.name);
     if (!flyers.length) { toast('チラシを1つ以上登録してください'); return; }
     s.flyers = flyers;
-    const typed = $('#sMembers').value.split('\n').map(x => x.trim()).filter(Boolean);
+    // 名前の一覧は管理者だけが変えられる（一般メンバーは元のまま保存）
+    const typed = (USE_SUPABASE && !isAdmin()) ? [...origMembers] : $('#sMembers').value.split('\n').map(x => x.trim()).filter(Boolean);
     const admins = USE_SUPABASE ? [] : $('#sAdmins').value.split('\n').map(x => x.trim()).filter(Boolean);
     if (!USE_SUPABASE && admins.length && !admins.includes(S.user) && !confirm('自分（' + S.user + '）が管理者に入っていません。保存すると設定を開けなくなります。よろしいですか？')) return;
     s.admins = admins;
@@ -1363,6 +1367,10 @@ async function renderAccounts() {
   const el = $('#acctList'); if (!el) return;
   let list; try { list = await SupabaseStore.listMembers(); } catch (e) { el.textContent = '一覧を読み込めません（' + (e.message || '通信') + '）'; return; }
   const me = S.me?.login_id;
+  if (!isAdmin()) {   // 一般メンバーには見るだけの一覧（ボタンなし）
+    el.innerHTML = `<table class="acctTbl"><tr><th>ID</th><th>表示名</th><th>権限</th><th>状態</th></tr>` + list.map(m => `<tr class="${m.active ? '' : 'off'}"><td><b>${esc(m.login_id)}</b>${m.login_id === me ? '<br><span class="small">（自分）</span>' : ''}</td><td>${esc(m.nickname)}</td><td>${m.role === 'admin' ? '管理者' : '配布'}</td><td>${m.auth_uid ? (m.active ? '有効' : '停止中') : '未作成'}</td></tr>`).join('') + '</table>';
+    return;
+  }
   el.innerHTML = `<table class="acctTbl"><tr><th>ID</th><th>表示名</th><th>権限</th><th>状態</th><th></th></tr>` + list.map(m => `<tr data-id="${esc(m.login_id)}" class="${m.active ? '' : 'off'}">
       <td><b>${esc(m.login_id)}</b>${m.login_id === me ? '<br><span class="small">（自分）</span>' : ''}</td>
       <td><input type="text" class="aNick" value="${esc(m.nickname)}"></td>
@@ -2404,7 +2412,8 @@ function showRules(first) {
 const isAdmin = () => { if (USE_SUPABASE) return S.me?.role === 'admin'; const a = S.settings?.admins || []; return !a.length || a.includes(S.user); };
 function applyRole() {
   const admin = isAdmin();
-  document.querySelector('.menuItem[data-view=settings]').hidden = !admin;
+  // 設定は全員が開ける（チラシの種類・枚数・告示日・任期満了日）。アカウント発行と名前一覧の変更は画面内で管理者だけに絞る
+  document.querySelector('.menuItem[data-view=settings]').hidden = USE_SUPABASE ? false : !admin;
   $('#btnAssignAdd').hidden = !admin;
   $('#btnBoardImport').hidden = !admin;
   const q = id => $(id) || {};   // 古いページが残っていて要素が無くても落ちないように
@@ -2538,7 +2547,7 @@ function renderDash() {
       <button data-go="list">📋 配布一覧・CSV</button><button data-go="towns">🏘 町丁目の配布率</button>
       <button data-go="boards">📌 ポスター掲示場</button><button data-go="spots">🎤 拠点・辻立ち</button>
       <button data-go="assign">📋 配布の割り当て</button><button data-go="study">📚 学習・資料</button>
-      <button data-go="rules">⚠ してはいけないこと</button>${isAdmin() ? '<button data-go="settings">⚙ 設定</button>' : ''}
+      <button data-go="rules">⚠ してはいけないこと</button>${(USE_SUPABASE || isAdmin()) ? '<button data-go="settings">⚙ 設定</button>' : ''}
     </div>
     <div class="small" style="margin-top:10px;color:var(--muted)">👤 ${esc(S.user || '')}　／　同じチラシの重なりは赤、地図を長押しで町丁目の世帯数・配布率</div>`;
   el.querySelectorAll('.dsec').forEach(h => h.onclick = () => { const k = h.dataset.k; if (closed.has(k)) closed.delete(k); else closed.add(k); localStorage.setItem('cm_dash_closed', JSON.stringify([...closed])); renderDash(); });
