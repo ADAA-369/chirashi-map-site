@@ -1,5 +1,5 @@
 /* 圏外対策：アプリの骨組みと町丁目データを端末に保存。データ（Supabase）と地図（Google）はネット必須 */
-const VERSION = 'v4';
+const VERSION = 'v5';
 const CACHE = 'chirashi-' + VERSION;
 const SHELL = ['./', './index.html', './style.css', './app.js', './config.js', './manifest.json', './data/stations.json', './data/admin_aichi.geojson',
   './data/by_city/23425_蟹江町.geojson', './data/by_city/23208_津島市.geojson', './data/by_city/23232_愛西市.geojson', './data/by_city/23237_あま市.geojson', './data/by_city/23235_弥富市.geojson', './data/by_city/23424_大治町.geojson', './data/by_city/23427_飛島村.geojson', './data/by_city/23220_稲沢市.geojson',

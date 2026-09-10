@@ -2329,9 +2329,10 @@ function applyRole() {
   document.querySelector('.menuItem[data-view=settings]').hidden = !admin;
   $('#btnAssignAdd').hidden = !admin;
   $('#btnBoardImport').hidden = !admin;
-  $('#btnPassword').hidden = !USE_SUPABASE;
-  $('#btnTrash').hidden = !(admin && USE_SUPABASE); $('#btnHistory').hidden = !(admin && USE_SUPABASE);
-  $('#btnSwitchUser').textContent = USE_SUPABASE ? '🚪 ログアウト' : '👤 名前を変える';
+  const q = id => $(id) || {};   // 古いページが残っていて要素が無くても落ちないように
+  q('#btnPassword').hidden = !USE_SUPABASE;
+  q('#btnTrash').hidden = !(admin && USE_SUPABASE); q('#btnHistory').hidden = !(admin && USE_SUPABASE);
+  q('#btnSwitchUser').textContent = USE_SUPABASE ? '🚪 ログアウト' : '👤 名前を変える';
   $('#menuUser').textContent = `👤 ${S.user || ''}${admin && (USE_SUPABASE || (S.settings?.admins || []).length) ? '（管理者）' : ''}`;
 }
 
@@ -2474,7 +2475,7 @@ function bindUI() {
   $('#periodSel').onchange = e => { S.filter.period = e.target.value; renderAll(); };
   $('#fab').onclick = startDrawing;
   // 下の「📌 貼る範囲」：メニューを開かずに、すぐ受け持ち範囲を囲める（掲示板チップが全部OFFなら自動でON）
-  $('#fab2').onclick = () => { if (!boardCitySet().size) { localStorage.setItem('cm_board_cities', JSON.stringify(Object.keys(ADMIN_COLORS))); renderBoards(); } startAssignDraw('poster'); };
+  if ($('#fab2')) $('#fab2').onclick = () => { if (!boardCitySet().size) { localStorage.setItem('cm_board_cities', JSON.stringify(Object.keys(ADMIN_COLORS))); renderBoards(); } startAssignDraw('poster'); };
   $('#btnDrawCancel').onclick = () => { S.drawPurpose = 'record'; cancelDrawing(); clearDraft(); };
   $('#sheetBody').addEventListener('input', () => { if (S.draftForm) saveDraft({ stage: 'form', ring: S.draftForm, form: formDraftValues() }); });
   $('#btnDrawRedo').onclick = () => setDrawMode(S.drawing.mode);
@@ -2486,9 +2487,12 @@ function bindUI() {
   $('#btnAdjustOk').onclick = () => endAdjust(true);
   $('#btnMenu').onclick = () => { $('#menu').hidden = false; applyRole(); };
   // 表示パネル（チラシ・境界線・地名・掲示板のチップ）：ボタンで開閉。開閉状態は端末に記憶
-  const setLayers = open => { $('#layerPanel').hidden = !open; $('#btnLayers').classList.toggle('on', open); localStorage.setItem('cm_layers_open', open ? '1' : '0'); if (S.map) setTimeout(() => google.maps.event.trigger(S.map, 'resize'), 50); };
-  setLayers(localStorage.getItem('cm_layers_open') === '1');
-  $('#btnLayers').onclick = () => setLayers($('#layerPanel').hidden);
+  // （古い index.html がキャッシュから出た場合に備え、新しい要素は無くても落ちないようにする）
+  if ($('#layerPanel') && $('#btnLayers')) {
+    const setLayers = open => { $('#layerPanel').hidden = !open; $('#btnLayers').classList.toggle('on', open); localStorage.setItem('cm_layers_open', open ? '1' : '0'); if (S.map) setTimeout(() => google.maps.event.trigger(S.map, 'resize'), 50); };
+    setLayers(localStorage.getItem('cm_layers_open') === '1');
+    $('#btnLayers').onclick = () => setLayers($('#layerPanel').hidden);
+  }
   $('#btnMenuClose').onclick = () => $('#menu').hidden = true;
   document.querySelectorAll('.menuItem[data-view]').forEach(b => b.onclick = () => {
     $('#menu').hidden = true;
@@ -2510,16 +2514,16 @@ function bindUI() {
   $('#btnStudy').onclick = () => { $('#menu').hidden = true; showStudy('core'); };
   $('#btnAssignClose').onclick = () => toggleAssignBar(false);
   $('#btnAssignAdd').onclick = () => startAssignDraw('flyer');
-  $('#btnBoardAssign').onclick = () => startAssignDraw('poster');
+  if ($('#btnBoardAssign')) $('#btnBoardAssign').onclick = () => startAssignDraw('poster');
   $('#btnAssignList').onclick = showAssignList;
   $('#btnStations').onclick = () => { S.stationsOn = !S.stationsOn; $('#btnStations').classList.toggle('on', S.stationsOn); renderStations(); };
   $('#btnBoardImport').onclick = openBoardImport;
   $('#btnPinCancel').onclick = () => endPinPlace(false);
   $('#btnPinOk').onclick = () => endPinPlace(true);
   $('#btnSwitchUser').onclick = async () => { $('#menu').hidden = true; if (USE_SUPABASE) { if (!confirm('ログアウトしますか？（次回はIDとパスワードが必要です）')) return; S.me = null; await SupabaseStore.signOut(); location.reload(); return; } localStorage.removeItem('cm_user'); showLogin(null); };
-  $('#btnPassword').onclick = () => { $('#menu').hidden = true; showPasswordChange(); };
-  $('#btnTrash').onclick = () => { $('#menu').hidden = true; showTrash('records'); };
-  $('#btnHistory').onclick = () => { $('#menu').hidden = true; showHistory(''); };
+  if ($('#btnPassword')) $('#btnPassword').onclick = () => { $('#menu').hidden = true; showPasswordChange(); };
+  if ($('#btnTrash')) $('#btnTrash').onclick = () => { $('#menu').hidden = true; showTrash('records'); };
+  if ($('#btnHistory')) $('#btnHistory').onclick = () => { $('#menu').hidden = true; showHistory(''); };
   $('#sheetHandle').onclick = userCloseSheet;
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheet').hidden) userCloseSheet(); });
   let _rt = null; window.addEventListener('resize', () => { clearTimeout(_rt); _rt = setTimeout(() => { renderDash(); if (S.map) google.maps.event.trigger(S.map, 'resize'); }, 200); });
