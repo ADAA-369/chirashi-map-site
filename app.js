@@ -1491,7 +1491,7 @@ function boardIcon(kind, color, text, status, scale = 1) {
   if (kind === 'official') {
     // 公営掲示場：市町村の色の四角の中に番号（本人指定。状態は右上の小さな印で表す）
     const fs = t.length >= 3 ? 15 : t.length === 2 ? 19 : 22;
-    const svgO = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><path d='M17,43 L24,52 L31,43 Z' fill='${color}'/><rect x='4' y='4' width='40' height='40' rx='9' fill='${color}' stroke='#fff' stroke-width='3'/><text x='24' y='${t.length >= 3 ? 29.5 : 31}' font-size='${fs}' font-weight='800' text-anchor='middle' fill='#fff' font-family='sans-serif'>${t}</text>${badge}</svg>`;
+    const svgO = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><path d='M17,43 L24,52 L31,43 Z' fill='${color}'/><rect x='4' y='4' width='40' height='40' rx='9' fill='${color}' stroke='#fff' stroke-width='3'/><text x='24' y='${t.length >= 3 ? 29.5 : 31}' font-size='${fs}' font-weight='800' text-anchor='middle' fill='#fff' font-family='sans-serif'>${t}</text></svg>`;
     return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svgO), scaledSize: size, anchor };
   }
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><rect x='1' y='1' width='46' height='54' rx='8' fill='${color}' opacity='.25'/>${board}${num}${badge}</svg>`;
@@ -1569,7 +1569,8 @@ function renderBoards() {
     if (vb && !bboxHit([b.lng, b.lat, b.lng, b.lat], vb)) continue;
     const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
     // 公営掲示場は市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）。状態は印で表す
-    const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : kind === 'official' ? (ADMIN_COLORS[boardCity(b)] || st.color) : st.color;
+    // 公営掲示場：貼ったら緑、まだなら市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）
+    const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : kind === 'official' ? (b.status === 'done' ? '#16a34a' : (ADMIN_COLORS[boardCity(b)] || st.color)) : st.color;
     const m = new google.maps.Marker({
       position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20, clickable: overlaysClickable(),
       icon: boardIcon(kind, color, b.no, b.status, iconScale),
@@ -1607,9 +1608,12 @@ async function showBoard(b) {
     <h3>📌 ${BOARD_KIND[b.kind || 'official'].short} ${esc(b.no)} ${esc(b.place)}</h3>
     <div class="small">${BOARD_KIND[b.kind || 'official'].name}${b.kind === 'political' && b.posted_at ? `　／　設置から ${Math.floor((new Date(today()) - new Date(b.posted_at)) / 86400000)} 日${posterBanDate() ? `　／　撤去期限 ${posterBanDate()}（任期満了6か月前）` : ''}` : ''}</div>
     ${b.kind === 'political' ? '<div class="small">※候補者名入りの政治活動用ポスターは任期満了日の6か月前から投票日まで掲示できません。掲示責任者・印刷者の表示と、掲示場所の所有者の許諾を確認</div>' : ''}
-    <div class="stTabs stTabs6">
+    ${(b.kind || 'official') === 'official'
+      // 公営掲示場は「まだ／貼った」の2択（本人指定）。古い状態（予約・対応中など）が残っていても「まだ」扱い
+      ? `<div class="stTabs"><button data-st="todo" class="${b.status !== 'done' ? 'on' : ''}" style="color:${ADMIN_COLORS[boardCity(b)] || '#e8eef5'};font-weight:700">まだ貼っていない</button><button data-st="done" class="${b.status === 'done' ? 'on' : ''}" style="color:#22c55e;font-weight:700">✓ 貼った</button></div>`
+      : `<div class="stTabs stTabs6">
       ${Object.entries(BOARD_STYLE).map(([k, v]) => `<button data-st="${k}" class="${b.status === k ? 'on' : ''}" style="color:${v.color}">${v.label === '未' ? '未着手' : v.label === '予' ? '予約' : v.label === '中' ? '対応中' : v.label === '済' ? '完了' : v.label === '異' ? '異常' : '要確認'}</button>`).join('')}
-    </div>
+    </div>`}
     <label>担当・貼った人<select id="bBy">${S.settings.members.map(m => `<option ${((b.posted_by || S.user) === m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
     <label>${b.kind === 'political' ? '設置日' : '日付'}<input id="bDate" type="date" value="${esc(b.posted_at || today())}"></label>
     <label>写真（任意・自動で縮小します）</label>
