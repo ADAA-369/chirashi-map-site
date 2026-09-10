@@ -43,6 +43,9 @@ h1,h2,h3{margin:0 0 8px}
 .adminChips .chip:not(.on){opacity:.55}
 .adminChips .chip .caret{font-size:9px;opacity:.8;margin-left:1px}
 .adminChips .chip .sub{font-size:9px;background:rgba(0,0,0,.35);border-radius:6px;padding:0 4px;margin-left:3px}
+.boardChips{padding-top:2px}
+.boardChips .chip.on{background:#111;border-color:var(--c);color:#fff}
+.boardChips .chip.on .dot{box-shadow:0 0 0 2px rgba(255,255,255,.35)}
 #chipMenu{position:fixed;z-index:60;width:250px;background:#111;color:#eee;border:1px solid #333;border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.5);font-size:13px}
 #chipMenu .cmHead{display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:14px}
 #chipMenu .cmHead .dot{width:10px;height:10px;border-radius:50%}

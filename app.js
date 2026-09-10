@@ -453,7 +453,7 @@ async function initMap() {
       if (S.drawing || S.adjust) return;
       const vb = viewBbox(0); const prev = S._lastVb;
       const moved = !prev || !vb || vb[0] < prev[0] || vb[1] < prev[1] || vb[2] > prev[2] || vb[3] > prev[3];   // 前回描いた余白の外に出たか
-      if (S._band !== band || moved) { renderRecords(); renderAssignments(); renderOazaLabels(); S._lastVb = viewBbox(0.3); }
+      if (S._band !== band || moved) { renderRecords(); renderAssignments(); renderOazaLabels(); renderBoards(); S._lastVb = viewBbox(0.3); }
       if (S._band !== undefined && S._band !== band) { renderSpots(); styleTowns(); styleAdmin(); styleOaza(); }
       S._band = band;
     }, 250);
@@ -1491,6 +1491,39 @@ function boardIcon(kind, color, text, status) {
 }
 S.boardKindFilter = 'all';
 function setLegend(open) { S.legendOpen = open; $('#legend').hidden = !open; $('#legendBtn').classList.toggle('on', open); }
+/* ---------------- 掲示板チップ（公営掲示場を市町村ごとにON/OFF・端末ごと） ---------------- */
+// 掲示場がどの市町村かは、座標から町丁目データで判定して記憶する（データベースに市町村の欄は持たない）
+function boardCity(b) {
+  S._boardCity = S._boardCity || new Map();
+  const key = `${b.id}|${b.lat}|${b.lng}`;
+  if (S._boardCity.has(key)) return S._boardCity.get(key);
+  let city = null;
+  if (S.towns.length && typeof b.lat === 'number') {
+    try { const pt = turf.point([b.lng, b.lat]); const t = S.towns.find(t => bboxHit([b.lng, b.lat, b.lng, b.lat], t.bbox) && turf.booleanPointInPolygon(pt, t.feature)); city = t ? t.city : null; } catch { }
+    S._boardCity.set(key, city);
+  }
+  return city;
+}
+function boardCitySet() { const all = Object.keys(ADMIN_COLORS); try { const a = JSON.parse(localStorage.getItem('cm_board_cities') || 'null'); return new Set(Array.isArray(a) ? a : all); } catch { return new Set(all); } }
+function renderBoardChips() {
+  const el = $('#boardChips'); if (!el) return;
+  const off = S.boards.filter(b => (b.kind || 'official') === 'official');
+  if (!off.length) { el.hidden = true; return; }
+  el.hidden = false;
+  const on = boardCitySet(); const all = Object.keys(ADMIN_COLORS);
+  const counts = {}; for (const b of off) { const c = boardCity(b) || '__none'; counts[c] = (counts[c] || 0) + 1; }
+  const cities = adminOrder().filter(n => counts[n]);
+  const html = `<button class="chip ${cities.every(n => on.has(n)) ? 'on' : ''}" data-n="__all" style="--c:#555" title="全部の掲示板をON/OFF"><span class="dot" style="background:#ddd"></span>掲示板</button>` +
+    cities.map(n => `<button class="chip ${on.has(n) ? 'on' : ''}" data-n="${esc(n)}" style="--c:${ADMIN_COLORS[n]}" title="${esc(n)}の公営掲示場 ${counts[n]}か所"><span class="dot"></span>${esc(n.replace(/(市|町|村)$/, ''))}<span class="sub">${counts[n]}</span></button>`).join('');
+  if (el.dataset.html === html) return;   // 変化がなければ描き直さない
+  el.dataset.html = html; el.innerHTML = html;
+  el.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+    const cur = boardCitySet(); const n = b.dataset.n;
+    if (n === '__all') { if (cities.every(x => cur.has(x))) cities.forEach(x => cur.delete(x)); else all.forEach(x => cur.add(x)); }
+    else if (cur.has(n)) cur.delete(n); else cur.add(n);
+    localStorage.setItem('cm_board_cities', JSON.stringify([...cur])); el.dataset.html = ''; renderBoards();
+  });
+}
 function toggleBoards(on) {
   S.boardsOn = on ?? !S.boardsOn;
   if (S.boardsOn && S.spotBarOn) toggleSpotBar(false);
@@ -1514,10 +1547,16 @@ function renderBoards() {
   const bad = S.boards.filter(b => b.status === 'damaged' || b.status === 'check').length;
   const ban = posterBanDate(); const banSoon = ban && pol.some(b => b.status === 'done') ? Math.ceil((new Date(ban) - new Date(today())) / 86400000) : null;
   $('#boardStat').textContent = `掲示場 ${cnt(off)}　一般 ${cnt(gen)}${pol.length ? `　二連 ${cnt(pol)}` : ''}${bad ? `　⚠${bad}` : ''}${banSoon != null && banSoon <= 60 ? `　🚫二連は${banSoon > 0 ? `あと${banSoon}日で` : ''}撤去期限${banSoon <= 0 ? '超過' : ''}` : ''}`;
-  if (!S.boardsOn) return;
+  renderBoardChips();
+  // 表示するもの：掲示場モード中はモードの絞り込みに従う。モード外でも「掲示板」チップがONの市町村の公営掲示場は常に出す
+  const chipOn = boardCitySet();
+  const vb = viewBbox(0.3);
   for (const b of S.boards) {
     const kind = b.kind || 'official';
-    if (S.boardKindFilter !== 'all' && kind !== S.boardKindFilter) continue;
+    const inMode = S.boardsOn && (S.boardKindFilter === 'all' || kind === S.boardKindFilter);
+    const inChip = kind === 'official' && chipOn.has(boardCity(b) || '__none');
+    if (!inMode && !inChip) continue;
+    if (vb && !bboxHit([b.lng, b.lat, b.lng, b.lat], vb)) continue;
     const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
     const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : st.color;
     const m = new google.maps.Marker({
