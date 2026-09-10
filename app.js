@@ -1493,7 +1493,9 @@ function boardIcon(kind, color, text, status, scale = 1) {
   if (kind === 'official') {
     // 公営掲示場：市町村の色の四角の中に番号（本人指定。状態は右上の小さな印で表す）
     const fs = t.length >= 3 ? 15 : t.length === 2 ? 19 : 22;
-    const svgO = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><path d='M17,43 L24,52 L31,43 Z' fill='${color}'/><rect x='4' y='4' width='40' height='40' rx='9' fill='${color}' stroke='#fff' stroke-width='3'/><text x='24' y='${t.length >= 3 ? 29.5 : 31}' font-size='${fs}' font-weight='800' text-anchor='middle' fill='#fff' font-family='sans-serif'>${t}</text></svg>`;
+    // 貼った掲示場は白地＋緑の縁と数字（稲沢の濃い緑など市町村色と見分けがつくように）
+    const done = status === 'done'; const fill = done ? '#ffffff' : color, edge = done ? '#16a34a' : '#ffffff', txt = done ? '#15803d' : '#ffffff';
+    const svgO = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><path d='M17,43 L24,52 L31,43 Z' fill='${done ? '#16a34a' : color}'/><rect x='4' y='4' width='40' height='40' rx='9' fill='${fill}' stroke='${edge}' stroke-width='3'/><text x='24' y='${t.length >= 3 ? 29.5 : 31}' font-size='${fs}' font-weight='800' text-anchor='middle' fill='${txt}' font-family='sans-serif'>${t}</text>${done ? `<circle cx='40' cy='8' r='8' fill='#16a34a' stroke='#fff' stroke-width='2'/><text x='40' y='11.5' font-size='10' font-weight='800' text-anchor='middle' fill='#fff' font-family='sans-serif'>✓</text>` : ''}</svg>`;
     return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svgO), scaledSize: size, anchor };
   }
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><rect x='1' y='1' width='46' height='54' rx='8' fill='${color}' opacity='.25'/>${board}${num}${badge}</svg>`;
@@ -1572,7 +1574,7 @@ function renderBoards() {
     const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
     // 公営掲示場は市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）。状態は印で表す
     // 公営掲示場：貼ったら緑、まだなら市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）
-    const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : kind === 'official' ? (b.status === 'done' ? '#16a34a' : (ADMIN_COLORS[boardCity(b)] || st.color)) : st.color;
+    const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : kind === 'official' ? (ADMIN_COLORS[boardCity(b)] || st.color) : st.color;
     const m = new google.maps.Marker({
       position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20, clickable: overlaysClickable(),
       icon: boardIcon(kind, color, b.no, b.status, iconScale),
