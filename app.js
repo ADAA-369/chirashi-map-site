@@ -451,6 +451,7 @@ async function initMap() {
   const up = () => { pointers = Math.max(0, pointers - 1); cancelLp(); };
   mapEl.addEventListener('pointerup', up, { capture: true }); mapEl.addEventListener('pointercancel', up, { capture: true });
   mapEl.addEventListener('wheel', cancelLp, { capture: true, passive: true });
+  mapEl.addEventListener('contextmenu', e => e.preventDefault());   // 長押しで「画像を保存」などのメニューを出さない
 
   S.map.addListener('click', ev => { if (S.boardAdding) addBoardAt(ev.latLng); else if (S.spotAdding) addSpotAt(ev.latLng); });
   S.map.addListener('idle', () => {
@@ -651,7 +652,8 @@ async function loadTowns() {
 function styleTowns() {
   const z = S.map.getZoom();
   const adding = !overlaysClickable();
-  S.map.data.setStyle({ visible: z >= 14, strokeColor: '#ffffff', strokeOpacity: z >= 16 ? 0.55 : 0.35, strokeWeight: 1, fillOpacity: 0, clickable: z >= 14 && !adding, zIndex: 1 });
+  // 町丁目はタップに反応させない（誤タップで情報窓が出るのを防ぐ）。配布率は長押しで見る
+  S.map.data.setStyle({ visible: z >= 14, strokeColor: '#ffffff', strokeOpacity: z >= 16 ? 0.55 : 0.35, strokeWeight: 1, fillOpacity: 0, clickable: false, zIndex: 1 });
 }
 // 追加モード：ポリゴンやピンがタップを横取りしないようにする
 function setAddingUI(on) {
@@ -878,7 +880,7 @@ function flyerTotals() {
 function renderLegend() {
   const n = filteredRecords().length;
   const stock = flyerTotals().filter(f => S.filter.flyers.has(f.id)).map(f => `<div class="lg"><span class="sw" style="background:${f.color};border-color:${f.color}"></span><span>${esc(f.name)} ${f.used.toLocaleString()}${f.total ? ` / ${f.total.toLocaleString()}枚　<b style="color:${f.remain < 0 ? '#ff7b72' : '#e8eef5'}">残り ${f.remain.toLocaleString()}</b>` : '枚'}</span></div>`).join('');
-  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（タップで配布率）</div><div class="lg"><span class="sw" style="border-color:${oazaColor('蟹江町')};background:none"></span>地名・丁目なし＝市町村と同じ色の細い線（市町村チップから表示／名前タップで配布率）</div><div class="lg" style="flex-wrap:wrap;gap:4px 8px">${Object.entries(ADMIN_COLORS).map(([n, c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span class="sw" style="border-color:${c};background:none;width:12px;height:8px"></span>${n}</span>`).join('')}</div><div class="small">表示中 ${n}件</div>`;
+  $('#legend').innerHTML = stock + `<div class="lg"><span class="sw" style="background:rgba(255,23,68,.6)"></span>同じチラシの二重配布</div><div class="lg"><span class="sw" style="border-color:#fff;background:none"></span>町丁目（長押しで世帯数・配布率）</div><div class="lg"><span class="sw" style="border-color:${oazaColor('蟹江町')};background:none"></span>地名・丁目なし＝市町村と同じ色の細い線（市町村チップから表示／名前タップで配布率）</div><div class="lg" style="flex-wrap:wrap;gap:4px 8px">${Object.entries(ADMIN_COLORS).map(([n, c]) => `<span style="display:inline-flex;align-items:center;gap:3px"><span class="sw" style="border-color:${c};background:none;width:12px;height:8px"></span>${n}</span>`).join('')}</div><div class="small">表示中 ${n}件</div>`;
 }
 function renderNotice() {
   const b = $('#noticeBanner'); const nd = S.settings.noticeDate;
@@ -2383,11 +2385,20 @@ function quickPin(latLng) {
   S.searchMarker = new google.maps.Marker({ position: latLng, map: S.map, zIndex: 50, animation: google.maps.Animation.DROP,
     icon: { path: 'M 0,0 C -2,-6 -12,-8 -12,-17 A 12,12 0 1,1 12,-17 C 12,-8 2,-6 0,0 Z', fillColor: '#e53935', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2, scale: 1.3 } });
   const it = { lat: latLng.lat(), lng: latLng.lng(), name: '選んだ地点', sub: `${latLng.lat().toFixed(5)}, ${latLng.lng().toFixed(5)}` };
-  try { const pt = turf.point([it.lng, it.lat]); const t = S.towns.find(t => bboxHit([it.lng, it.lat, it.lng, it.lat], t.bbox) && turf.booleanPointInPolygon(pt, t.feature)); if (t) it.name = `${t.city} ${t.name}`; } catch { }
+  let town = null;
+  try { const pt = turf.point([it.lng, it.lat]); town = S.towns.find(t => bboxHit([it.lng, it.lat, it.lng, it.lat], t.bbox) && turf.booleanPointInPolygon(pt, t.feature)) || null; if (town) it.name = `${town.city} ${town.name}`; } catch { }
+  // 長押しした町丁目の世帯数と配布率（タップでは出さず、長押しの時だけ）
+  let townHtml = '';
+  if (town) {
+    const recs = filteredRecords();
+    const rows = S.settings.flyers.filter(f => S.filter.flyers.has(f.id)).map(f => { const cov = coverageOf(town, recs.filter(r => r.flyer_id === f.id)); return `<div style="margin:3px 0"><span style="display:inline-block;width:10px;height:10px;background:${f.color};border-radius:2px;margin-right:6px"></span>${esc(f.name)}：<b>${Math.round(cov * 100)}%</b>（約${Math.round(cov * town.setai)}世帯）</div>`; }).join('');
+    townHtml = `<div class="small" style="margin:4px 0 8px">${town.setai.toLocaleString()}世帯 ／ ${town.jinko.toLocaleString()}人${town.kigo && town.kigo !== 'E1' ? '（飛び地）' : ''}</div><div style="font-size:13px;margin-bottom:6px">${rows || '<span class="small">表示中のチラシがありません</span>'}</div>`;
+  }
   S.searchMarker.addListener('click', () => showSearchSheet(it));
   const clearStar = () => { if (S.searchMarker) { S.searchMarker.setMap(null); S.searchMarker = null; } closeSheet(); };
   openSheet(`
     <h3>📍 ${esc(it.name)}</h3>
+    ${townHtml}
     <div class="small">長押しした地点。ここで何をしますか？</div>
     <div class="btnRow"><button class="ghost" id="qpRecord">🗺 ここを含む範囲の配布を記録</button></div>
     <div class="btnRow"><button class="ghost" id="qpSpot">🎤 拠点・辻立ちを追加</button><button class="ghost" id="qpBoard">📌 ポスター場所を追加</button></div>
@@ -2444,7 +2455,7 @@ function renderDash() {
       <button data-go="assign">📋 配布の割り当て</button><button data-go="study">📚 学習・資料</button>
       <button data-go="rules">⚠ してはいけないこと</button>${isAdmin() ? '<button data-go="settings">⚙ 設定</button>' : ''}
     </div>
-    <div class="small" style="margin-top:10px;color:var(--muted)">👤 ${esc(S.user || '')}　／　同じチラシの重なりは赤、町丁目の白線をクリックで配布率</div>`;
+    <div class="small" style="margin-top:10px;color:var(--muted)">👤 ${esc(S.user || '')}　／　同じチラシの重なりは赤、地図を長押しで町丁目の世帯数・配布率</div>`;
   el.querySelectorAll('.dsec').forEach(h => h.onclick = () => { const k = h.dataset.k; if (closed.has(k)) closed.delete(k); else closed.add(k); localStorage.setItem('cm_dash_closed', JSON.stringify([...closed])); renderDash(); });
   el.querySelectorAll('[data-rec]').forEach(x => x.onclick = () => { const r = S.records.find(y => y.id === x.dataset.rec); if (!r) return; const c = turf.centerOfMass(recPolygon(r)).geometry.coordinates; S.map.panTo({ lat: c[1], lng: c[0] }); if (S.map.getZoom() < 16) S.map.setZoom(16); showRecord(r); });
   el.querySelectorAll('[data-ev]').forEach(x => x.onclick = () => { const e = S.events.find(y => y.id === x.dataset.ev); const sp = e && S.spots.find(y => y.id === e.spot_id); if (!sp) return; S.map.panTo({ lat: sp.lat, lng: sp.lng }); showSpot(sp); });

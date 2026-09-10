@@ -87,7 +87,8 @@ h1,h2,h3{margin:0 0 8px}
 /* map */
 #main{flex:1;display:flex;min-height:0;position:relative}
 #mapWrap{flex:1;position:relative;min-height:0}
-#map{position:absolute;inset:0}
+#map{position:absolute;inset:0;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+#map img,#map canvas{-webkit-touch-callout:none;-webkit-user-drag:none}
 
 /* draw layer */
 #drawLayer{position:absolute;inset:0;z-index:20;touch-action:none}
