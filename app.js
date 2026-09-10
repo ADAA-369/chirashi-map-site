@@ -1471,8 +1471,9 @@ const BOARD_KIND = { official: { name: '選挙用ポスター掲示場', short: 
 function politicalColor(b) { if (!b.posted_at) return '#9aa7b4'; const d = (new Date(today()) - new Date(b.posted_at)) / 86400000; return d < 90 ? '#3fb950' : d < 180 ? '#facc15' : '#ef4444'; }
 function posterBanDate() { const t = S.settings?.termEndDate; if (!t) return null; const d = new Date(t); d.setMonth(d.getMonth() - 6); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); }
 // 看板の形のアイコン（SVG）。絵が主役：掲示板にポスターが貼られた図。色＝状態、番号は下に小さく
-function boardIcon(kind, color, text, status) {
+function boardIcon(kind, color, text, status, scale = 1) {
   const t = esc(String(text || '').slice(0, 4));
+  const size = new google.maps.Size(Math.round(48 * scale), Math.round(56 * scale)), anchor = new google.maps.Point(Math.round(24 * scale), Math.round(52 * scale));
   const mark = status === 'done' ? '✓' : status === 'damaged' ? '!' : status === 'check' ? '?' : status === 'working' ? '…' : status === 'reserved' ? '予' : '';
   const badge = mark ? `<circle cx='40' cy='8' r='8' fill='#fff' stroke='${color}' stroke-width='2'/><text x='40' y='11.5' font-size='10' font-weight='700' text-anchor='middle' fill='${color}' font-family='sans-serif'>${mark}</text>` : '';
   const board = kind === 'general'
@@ -1484,10 +1485,10 @@ function boardIcon(kind, color, text, status) {
   if (kind === 'political') {
     const board2 = `<rect x='6' y='8' width='16' height='26' rx='1.5' fill='#fff' stroke='#333' stroke-width='1.5'/><rect x='26' y='8' width='16' height='26' rx='1.5' fill='#fff' stroke='#333' stroke-width='1.5'/><rect x='8' y='10' width='12' height='9' fill='${color}'/><rect x='28' y='10' width='12' height='9' fill='${color}'/><rect x='8' y='21' width='12' height='2' fill='#333'/><rect x='28' y='21' width='12' height='2' fill='#333'/><rect x='8' y='25' width='9' height='2' fill='#333'/><rect x='28' y='25' width='9' height='2' fill='#333'/>`;
     const svg2 = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><rect x='1' y='1' width='46' height='54' rx='8' fill='${color}' stroke='#fff' stroke-width='2'/><rect x='4' y='4' width='40' height='48' rx='6' fill='#fff' opacity='.25'/>${board2}${num}${badge}</svg>`;
-    return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg2), scaledSize: new google.maps.Size(48, 56), anchor: new google.maps.Point(24, 52) };
+    return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg2), scaledSize: size, anchor };
   }
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><rect x='1' y='1' width='46' height='54' rx='8' fill='${color}' opacity='.25'/>${board}${num}${badge}</svg>`;
-  return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), scaledSize: new google.maps.Size(48, 56), anchor: new google.maps.Point(24, 52) };
+  return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), scaledSize: size, anchor };
 }
 S.boardKindFilter = 'all';
 function setLegend(open) { S.legendOpen = open; $('#legend').hidden = !open; $('#legendBtn').classList.toggle('on', open); }
@@ -1551,6 +1552,8 @@ function renderBoards() {
   // 表示するもの：掲示場モード中はモードの絞り込みに従う。モード外でも「掲示板」チップがONの市町村の公営掲示場は常に出す
   const chipOn = boardCitySet();
   const vb = viewBbox(0.3);
+  // 掲示場モード外（チップ表示）では、引いた地図で邪魔にならないよう小さく描く
+  const z = S.map.getZoom(); const iconScale = S.boardsOn || z >= 16 ? 1 : z >= 14.5 ? 0.7 : 0.5;
   for (const b of S.boards) {
     const kind = b.kind || 'official';
     const inMode = S.boardsOn && (S.boardKindFilter === 'all' || kind === S.boardKindFilter);
@@ -1561,7 +1564,7 @@ function renderBoards() {
     const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : st.color;
     const m = new google.maps.Marker({
       position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20, clickable: overlaysClickable(),
-      icon: boardIcon(kind, color, b.no, b.status),
+      icon: boardIcon(kind, color, b.no, b.status, iconScale),
       title: `${b.no ? b.no + ' ' : ''}${b.place || ''}（${BOARD_ST_LABEL(b.status)}）`,
     });
     m.addListener('click', () => { if (overlaysClickable()) showBoard(b); });
