@@ -2457,6 +2457,8 @@ function bindUI() {
   $('#periodSel').value = S.filter.period;
   $('#periodSel').onchange = e => { S.filter.period = e.target.value; renderAll(); };
   $('#fab').onclick = startDrawing;
+  // 下の「📌 貼る範囲」：メニューを開かずに、すぐ受け持ち範囲を囲める（掲示板チップが全部OFFなら自動でON）
+  $('#fab2').onclick = () => { if (!boardCitySet().size) { localStorage.setItem('cm_board_cities', JSON.stringify(Object.keys(ADMIN_COLORS))); renderBoards(); } startAssignDraw('poster'); };
   $('#btnDrawCancel').onclick = () => { S.drawPurpose = 'record'; cancelDrawing(); clearDraft(); };
   $('#sheetBody').addEventListener('input', () => { if (S.draftForm) saveDraft({ stage: 'form', ring: S.draftForm, form: formDraftValues() }); });
   $('#btnDrawRedo').onclick = () => setDrawMode(S.drawing.mode);
