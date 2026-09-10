@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="配布MAP">
-<link rel="stylesheet" href="style.css?v=20260910142142">
+<link rel="stylesheet" href="style.css?v=20260910143628">
 </head>
 <body>
 
@@ -76,6 +76,7 @@
     <div class="boardBarRow">
       <span id="boardStat"></span>
       <select id="boardKindSel" aria-label="表示する種類"><option value="all">両方</option><option value="official">掲示場のみ</option><option value="general">一般ポスターのみ</option><option value="political">二連のみ</option></select>
+      <button id="btnBoardAssign" class="ghost">✎ 貼る範囲を受け持つ</button>
       <button id="btnBoardAdd" class="ghost">＋ 場所を追加</button>
       <button id="btnBoardImport" class="ghost">📥 一覧を貼り付け</button>
       <button id="btnBoardList" class="ghost">一覧</button>
@@ -186,9 +187,9 @@
   <div id="toast" hidden></div>
 </div>
 
-<script src="config.js?v=20260910142142"></script>
+<script src="config.js?v=20260910143628"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
-<script src="app.js?v=20260910142142"></script>
+<script src="app.js?v=20260910143628"></script>
 </body>
 </html>

@@ -253,7 +253,7 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 const safeColor = c => /^#[0-9a-f]{6}$/i.test(String(c || '')) ? c : '#888888';
 // 通信できない種類のエラーか（圏外・タイムアウトなど。権限エラーなどは含めない）
 const isNetErr = e => !navigator.onLine || /fetch|network|load failed|timeout|failed to/i.test(String(e?.message || e || ''));
-const flyerOf = id => { const f = S.settings.flyers.find(f => f.id === id); return f ? { ...f, color: safeColor(f.color) } : { id, name: '(削除済み)', color: '#888888' }; };
+const flyerOf = id => { if (id === '__poster') return { id, name: 'ポスター貼り', color: '#a855f7' }; const f = S.settings.flyers.find(f => f.id === id); return f ? { ...f, color: safeColor(f.color) } : { id, name: '(削除済み)', color: '#888888' }; };
 function toast(msg, ms = 2200) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(t._t); t._t = setTimeout(() => t.hidden = true, ms); }
 
 /* ---------------- 起動 ---------------- */
@@ -885,7 +885,7 @@ function renderNotice() {
 
 /* ---------------- 範囲の描画（なぞる／点で囲む）＋つまみ調整 ---------------- */
 function startDrawing() {
-  if ($('#fab').disabled) return;
+  if ($('#fab').disabled && S.asgKind !== 'poster') return;   // 告示後もポスター貼りの受け持ち範囲は描ける
   if (!guardMode()) { S.drawPurpose = 'record'; return; }
   setBarsLocked(true);
   S.infoWin.close(); closeSheet();
@@ -1049,7 +1049,7 @@ function endAdjust(ok) {
   $('#adjustBar').hidden = true; $('#fab').hidden = false; $('#legendBtn').hidden = barOn(); renderRecords();
   for (const p of S.polys.values()) p.setOptions({ clickable: true });
   if (!ok) { S.drawPurpose = 'record'; return; }
-  if (!a.rec && S.drawPurpose === 'assign') { S.drawPurpose = 'record'; openAssignForm({ polygon: ring }); return; }
+  if (!a.rec && S.drawPurpose === 'assign') { S.drawPurpose = 'record'; const k = S.asgKind; S.asgKind = null; openAssignForm(k === 'poster' ? { polygon: ring, flyer_id: POSTER_ASG, member: S.user } : { polygon: ring }); return; }
   if (a.rec) {
     // 既存記録の形の変更：同じ範囲の記録すべてに反映してから内容編集へ
     const list = groupOf(a.rec).length ? groupOf(a.rec) : [a.rec];
@@ -1630,6 +1630,7 @@ async function showBoard(b) {
     <h3>📌 ${BOARD_KIND[b.kind || 'official'].short} ${esc(b.no)} ${esc(b.place)}</h3>
     <div class="small">${BOARD_KIND[b.kind || 'official'].name}${b.kind === 'political' && b.posted_at ? `　／　設置から ${Math.floor((new Date(today()) - new Date(b.posted_at)) / 86400000)} 日${posterBanDate() ? `　／　撤去期限 ${posterBanDate()}（任期満了6か月前）` : ''}` : ''}</div>
     ${b.kind === 'political' ? '<div class="small">※候補者名入りの政治活動用ポスターは任期満了日の6か月前から投票日まで掲示できません。掲示責任者・印刷者の表示と、掲示場所の所有者の許諾を確認</div>' : ''}
+    ${(() => { const pa = (b.kind || 'official') === 'official' ? posterAsgOf(b) : null; return pa ? `<div class="small" style="color:#d8b4fe">📌 受け持ち：<b>${esc(pa.member || '未定')}</b>${pa.due ? `（${esc(pa.due)}）` : ''}${pa.note ? `　${esc(pa.note)}` : ''}</div>` : ''; })()}
     ${(b.kind || 'official') === 'official'
       // 公営掲示場は「まだ／貼った」の2択（本人指定）。古い状態（予約・対応中など）が残っていても「まだ」扱い
       ? `<div class="stTabs"><button data-st="todo" class="${b.status !== 'done' ? 'on' : ''}" style="color:${ADMIN_COLORS[boardCity(b)] || '#e8eef5'};font-weight:700">まだ貼っていない</button><button data-st="done" class="${b.status === 'done' ? 'on' : ''}" style="color:${postedColor(boardCity(b))};font-weight:700">✓ 貼った</button></div>`
@@ -1998,50 +1999,97 @@ function renderAssignments() {
   const vb = viewBbox(0.3);
   for (const a of open) {
     if (vb && !bboxHit(turf.bbox(turf.polygon([a.polygon])), vb)) continue;
-    const isMine = a.member === S.user;
-    const col = isMine ? '#ffd60a' : '#cbd5e1';
-    const poly = new google.maps.Polygon({ paths: a.polygon.map(([lng, lat]) => ({ lat, lng })), strokeColor: col, strokeOpacity: 1, strokeWeight: 3, fillColor: col, fillOpacity: isMine ? 0.18 : 0.08, map: S.map, zIndex: 1, clickable: overlaysClickable() });
+    const isMine = a.member === S.user; const poster = isPosterAsg(a);
+    // チラシの割り当て＝黄色、ポスター貼りの受け持ち＝紫の破線
+    const col = poster ? (isMine ? '#c084fc' : '#a78bfa') : (isMine ? '#ffd60a' : '#cbd5e1');
+    const poly = new google.maps.Polygon({ paths: a.polygon.map(([lng, lat]) => ({ lat, lng })), strokeColor: col, strokeOpacity: poster ? 0 : 1, strokeWeight: 3, fillColor: col, fillOpacity: poster ? 0.14 : (isMine ? 0.18 : 0.08), map: S.map, zIndex: 1, clickable: overlaysClickable() });
     poly.addListener('click', ev => { if (!S.drawing && !S.pin) showAssignment(a); });
     S.asgPolys.set(a.id, poly);
+    if (poster) {   // 破線の縁
+      const ring = a.polygon.map(([lng, lat]) => ({ lat, lng })); ring.push(ring[0]);
+      const dash = new google.maps.Polyline({ path: ring, map: S.map, strokeOpacity: 0, zIndex: 2, clickable: false, icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeColor: col, scale: 3 }, offset: '0', repeat: '12px' }] });
+      S.asgPolys.set(a.id + '_dash', dash);
+    }
     if (showLabels) {
       const c = turf.centerOfMass(turf.polygon([a.polygon])).geometry.coordinates;
-      const f = a.flyer_id ? flyerOf(a.flyer_id) : null;
-      const html = `📋 <b>${esc(a.member || '担当未定')}</b>${a.due ? ` 〜${fmtDate(a.due)}` : ''}<br>${f ? esc(f.name) : 'チラシ未定'}${a.est_setai ? ` 約${a.est_setai}世帯` : ''}`;
-      const lb = new RecLabel({ lat: c[1], lng: c[0] }, html, null, { cls: 'asgLabel' + (isMine ? '' : ' other') }); lb.setMap(S.map);
+      let html;
+      if (poster) { const inb = boardsInAsg(a); html = `📌 <b>${esc(a.member || '担当未定')}</b> が貼る${a.due ? ` ${fmtDate(a.due)}` : ''}<br>掲示場 ${inb.total}か所（貼った ${inb.done}）`; }
+      else { const f = a.flyer_id ? flyerOf(a.flyer_id) : null; html = `📋 <b>${esc(a.member || '担当未定')}</b>${a.due ? ` 〜${fmtDate(a.due)}` : ''}<br>${f ? esc(f.name) : 'チラシ未定'}${a.est_setai ? ` 約${a.est_setai}世帯` : ''}`; }
+      const lb = new RecLabel({ lat: c[1], lng: c[0] }, html, null, { cls: 'asgLabel' + (poster ? ' poster' : '') + (isMine ? '' : ' other') }); lb.setMap(S.map);
       S.asgLabels.push(lb);
     }
   }
 }
-function startAssignDraw() {
-  if ($('#fab').disabled) { toast('告示日を過ぎているため作成できません'); return; }
+// 割り当ての種類：'flyer'＝チラシ配布の予定エリア／'poster'＝ポスター貼りの受け持ち範囲（範囲内の公営掲示場を受け持つ）
+const POSTER_ASG = '__poster';
+const isPosterAsg = a => a && a.flyer_id === POSTER_ASG;
+// 範囲内の公営掲示場（合計と貼った数）
+function boardsInAsg(a) {
+  try {
+    const poly = turf.polygon([a.polygon]); const bb = turf.bbox(poly);
+    const list = S.boards.filter(b => (b.kind || 'official') === 'official' && typeof b.lat === 'number' && bboxHit([b.lng, b.lat, b.lng, b.lat], bb) && turf.booleanPointInPolygon(turf.point([b.lng, b.lat]), poly));
+    return { list, total: list.length, done: list.filter(b => b.status === 'done').length };
+  } catch { return { list: [], total: 0, done: 0 }; }
+}
+// この掲示場を受け持っている割り当て（未完了のもの）
+function posterAsgOf(b) {
+  if (typeof b.lat !== 'number') return null;
+  const pt = turf.point([b.lng, b.lat]);
+  return S.assignments.find(a => isPosterAsg(a) && a.status !== 'done' && (() => { try { return turf.booleanPointInPolygon(pt, turf.polygon([a.polygon])); } catch { return false; } })()) || null;
+}
+function startAssignDraw(kind = 'flyer') {
+  if (kind !== 'poster' && $('#fab').disabled) { toast('告示日を過ぎているため作成できません'); return; }
   if (!guardMode()) return;
-  S.drawPurpose = 'assign'; startDrawing();
-  setTimeout(() => { const h = $('#drawHint'); if (h && S.drawing) h.textContent = '割り当てる範囲を囲んでください（' + h.textContent + '）'; }, 0);
+  S.drawPurpose = 'assign'; S.asgKind = kind; startDrawing();
+  setTimeout(() => { const h = $('#drawHint'); if (h && S.drawing) h.textContent = (kind === 'poster' ? '自分が貼る掲示場を囲んでください（' : '割り当てる範囲を囲んでください（') + h.textContent + '）'; }, 0);
 }
 function openAssignForm(a) {
-  const isNew = !a.id;
+  const isNew = !a.id; const poster = isPosterAsg(a);
   const poly = turf.polygon([a.polygon]); const est = estimateRecord(poly);
+  const inb = poster ? boardsInAsg(a) : null;
   openSheet(`
-    <h3>${isNew ? '配布の割り当てを作る' : '割り当てを編集'}</h3>
-    <div class="small">推定 <b>${est.setai}</b> 世帯 ／ ${esc(est.town)}</div>
-    <label>担当者<select id="aMember"><option value="">（未定・誰でも）</option>${S.settings.members.map(m => `<option ${a.member === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
-    <label>配るチラシ<select id="aFlyer"><option value="">（未定）</option>${S.settings.flyers.map(f => `<option value="${f.id}" ${a.flyer_id === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>
-    <label>期限（任意）<input id="aDue" type="date" value="${esc(a.due || '')}"></label>
-    <label>メモ（任意）<input id="aNote" type="text" value="${esc(a.note || '')}" placeholder="例：団地は管理人に一声かけてから"></label>
+    <h3>${poster ? (isNew ? '📌 ポスター貼りの受け持ち範囲' : '📌 受け持ち範囲を編集') : (isNew ? '配布の割り当てを作る' : '割り当てを編集')}</h3>
+    ${poster
+      ? `<div class="small">この範囲の公営掲示場 <b>${inb.total}</b> か所（貼った ${inb.done}）／ ${esc(est.town)}${inb.total ? `<br>番号：${esc(inb.list.map(b => b.no).filter(Boolean).slice(0, 40).join('・'))}${inb.total > 40 ? '…' : ''}` : '<br>範囲に掲示場がありません。囲み直してください'}</div>`
+      : `<div class="small">推定 <b>${est.setai}</b> 世帯 ／ ${esc(est.town)}</div>`}
+    <label>${poster ? '貼る人' : '担当者'}<select id="aMember"><option value="">（未定・誰でも）</option>${S.settings.members.map(m => `<option ${a.member === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
+    ${poster ? '' : `<label>配るチラシ<select id="aFlyer"><option value="">（未定）</option>${S.settings.flyers.map(f => `<option value="${f.id}" ${a.flyer_id === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></label>`}
+    <label>${poster ? '貼る予定日（任意）' : '期限（任意）'}<input id="aDue" type="date" value="${esc(a.due || '')}"></label>
+    <label>メモ（任意）<input id="aNote" type="text" value="${esc(a.note || '')}" placeholder="${poster ? '例：午前中に回ります／脚立あり' : '例：団地は管理人に一声かけてから'}"></label>
     <div class="btnRow"><button class="ghost" id="aCancel">やめる</button><button class="primary" id="aSave">保存する</button></div>
   `);
   S.sheetGuard = '入力中の内容（描いた範囲）が消えます。閉じますか？';
   $('#aCancel').onclick = closeSheet;
   const aId = a.id || uid();
   $('#aSave').onclick = async () => {
-    const na = { ...a, id: aId, member: $('#aMember').value || null, flyer_id: $('#aFlyer').value || null, due: $('#aDue').value || null, note: $('#aNote').value.trim(), status: a.status || 'planned', est_setai: est.setai, town: est.town, created_by: a.created_by || S.user };
+    const na = { ...a, id: aId, member: $('#aMember').value || null, flyer_id: poster ? POSTER_ASG : ($('#aFlyer').value || null), due: $('#aDue').value || null, note: $('#aNote').value.trim(), status: a.status || 'planned', est_setai: poster ? (inb ? inb.total : 0) : est.setai, town: est.town, created_by: a.created_by || S.user };
     $('#aSave').disabled = true;
     try { await store.saveAssignment(na); } catch { $('#aSave').disabled = false; return; }
     S.assignments = await store.loadAssignments(); closeSheet(); renderAssignments(); toast('割り当てを保存しました');
   };
 }
 function showAssignment(a) {
-  const f = a.flyer_id ? flyerOf(a.flyer_id) : null;
+  const f = a.flyer_id && !isPosterAsg(a) ? flyerOf(a.flyer_id) : null;
+  if (isPosterAsg(a)) {
+    const inb = boardsInAsg(a); const canEdit = isAdmin() || a.member === S.user || a.created_by === S.user;
+    openSheet(`
+      <h3>📌 ${esc(a.member || '担当未定')} が貼る範囲${a.due ? `　${esc(a.due)}` : ''}</h3>
+      <dl class="kv">
+        <dt>掲示場</dt><dd>${inb.total} か所（貼った ${inb.done}／残り ${inb.total - inb.done}）</dd>
+        ${a.note ? `<dt>メモ</dt><dd>${esc(a.note)}</dd>` : ''}
+        <dt>作成</dt><dd>${esc(a.created_by || '')}</dd>
+      </dl>
+      <div class="small" style="margin:6px 0 4px">範囲内の掲示場（タップで開く）</div>
+      <div class="asgBoards">${inb.list.sort((x, y) => String(x.no).localeCompare(String(y.no), 'ja', { numeric: true })).map(b => `<button class="chip ${b.status === 'done' ? 'on' : ''}" data-bid="${esc(b.id)}" style="--c:${b.status === 'done' ? postedColor(boardCity(b)) : (ADMIN_COLORS[boardCity(b)] || '#888')}"><span class="dot"></span>${esc(b.no || '?')}${b.status === 'done' ? ' ✓' : ''}</button>`).join('') || '<span class="small">なし</span>'}</div>
+      <div class="btnRow"><button class="ghost" id="asDone">全部貼り終えた（完了にする）</button>${canEdit ? '<button class="ghost" id="asEdit">編集</button><button class="ghost" id="asDel" style="color:var(--danger)">削除</button>' : ''}<button class="ghost" id="asClose">閉じる</button></div>
+    `);
+    $('#asClose').onclick = closeSheet;
+    $('#sheetBody').querySelectorAll('[data-bid]').forEach(x => x.onclick = () => { const b = S.boards.find(y => y.id === x.dataset.bid); if (b) { S.map.panTo({ lat: b.lat, lng: b.lng }); showBoard(b); } });
+    if ($('#asEdit')) $('#asEdit').onclick = () => openAssignForm(a);
+    $('#asDone').onclick = async () => { if (inb.done < inb.total && !confirm(`まだ貼っていない掲示場が ${inb.total - inb.done} か所あります。完了にしますか？`)) return; try { await store.saveAssignment({ ...a, status: 'done' }); } catch { return; } S.assignments = await store.loadAssignments(); closeSheet(); renderAssignments(); toast('完了にしました'); };
+    if ($('#asDel')) $('#asDel').onclick = async () => { if (!confirm('この受け持ち範囲を削除しますか？')) return; try { await store.deleteAssignment(a.id); } catch { return; } S.assignments = await store.loadAssignments(); closeSheet(); renderAssignments(); toast('削除しました'); };
+    return;
+  }
   openSheet(`
     <h3>📋 ${esc(a.member || '担当未定')}${a.due ? `　〜${esc(a.due)}` : ''}</h3>
     <dl class="kv">
@@ -2064,7 +2112,7 @@ function showAssignList() {
   openSheet(`
     <h3>配布の割り当て一覧</h3>
     <div class="small">未完了 ${rows.filter(a => a.status !== 'done').length} ／ 完了 ${rows.filter(a => a.status === 'done').length}</div>
-    <div class="tableWrap"><table><thead><tr><th>状態</th><th>担当</th><th>期限</th><th>チラシ</th><th>主な町丁目</th><th>世帯</th></tr></thead><tbody>
+    <div class="tableWrap"><table><thead><tr><th>状態</th><th>担当</th><th>期限</th><th>チラシ／ポスター</th><th>主な町丁目</th><th>世帯・掲示場</th></tr></thead><tbody>
     ${rows.map(a => `<tr data-id="${a.id}"><td>${a.status === 'done' ? '✅' : '⬜'}</td><td>${esc(a.member || '未定')}</td><td>${a.due ? fmtDate(a.due) : ''}</td><td>${a.flyer_id ? esc(flyerOf(a.flyer_id).name) : ''}</td><td>${esc(a.town || '')}</td><td>${a.est_setai ?? ''}</td></tr>`).join('') || '<tr><td colspan="6" class="small">まだありません。「＋ 割り当てを作る」で範囲を囲んでください</td></tr>'}
     </tbody></table></div>
     <div class="btnRow"><button class="primary" id="alClose">閉じる</button></div>
@@ -2367,17 +2415,19 @@ function renderDash() {
   const myAsg = S.assignments.filter(a => a.status !== 'done' && (a.member === S.user || !a.member));
   const recent = [...S.records].sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''))).slice(0, 10);
   const period = S.filter.period === 'all' ? '全期間' : `直近${S.filter.period}日`;
+  // 掲示場の進み具合は市町村ごとに（827か所の合計だけでは分からないため）
+  const cityStat = {}; for (const b of off) { const c = boardCity(b) || 'その他'; (cityStat[c] ||= [0, 0])[0]++; if (b.status === 'done') cityStat[c][1]++; }
+  const byCity = [...adminOrder(), 'その他'].filter(c => cityStat[c]).map(c => [c, cityStat[c][0], cityStat[c][1]]);
+  // 各セクションは見出しをクリックで折りたためる（端末ごとに記憶）
+  let closed; try { closed = new Set(JSON.parse(localStorage.getItem('cm_dash_closed') || '[]')); } catch { closed = new Set(); }
+  const sec = (key, title, body) => `<h4 class="dsec" data-k="${key}">${title}<span class="tg">${closed.has(key) ? '▸' : '▾'}</span></h4><div class="card" ${closed.has(key) ? 'hidden' : ''}>${body}</div>`;
   el.innerHTML = `
     <div class="card"><div class="row2"><div><div class="small">今日の配布</div><div class="big">${sumCount(recsToday).toLocaleString()}<span class="small"> 枚／${recsToday.length}件</span></div></div><div style="text-align:right"><div class="small">${period}</div><div class="big">${sumCount(recs30).toLocaleString()}<span class="small"> 枚／${recs30.length}件</span></div></div></div></div>
-    <h4>チラシ別（残り）</h4>
-    <div class="card">${totals.length ? totals.map(f => `<div class="row2" style="margin:4px 0"><span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${safeColor(f.color)};margin-right:6px"></span>${esc(f.name)}</span><b>${f.used.toLocaleString()}${f.total ? ` / ${f.total.toLocaleString()}` : ''}枚</b></div>${f.total ? `<div class="bar"><i style="width:${Math.min(100, Math.round(f.used / f.total * 100))}%"></i></div><div class="small" style="text-align:right">残り ${f.remain.toLocaleString()}</div>` : ''}`).join('') : '<div class="small">表示中のチラシがありません</div>'}</div>
-    <h4>次の予定</h4>
-    <div class="card">${up.length ? up.map(e => `<div class="recItem" data-ev="${esc(e.id)}"><span class="t"><b>${fmtDate(e.date)}</b> ${esc(e.time || '')} ${esc(spotName(e.spot_id))}</span><span class="n">${Array.isArray(e.attendees) && e.attendees.length ? `参加${e.attendees.length}` : ''}</span></div>`).join('') : '<div class="small">予定はありません</div>'}</div>
-    <h4>ポスター</h4>
-    <div class="card"><div class="row2"><span>掲示場</span><b>${offDone}/${off.length}${off.length ? `（${Math.round(offDone / off.length * 100)}%）` : ''}</b></div>${off.length ? `<div class="bar"><i style="width:${Math.round(offDone / off.length * 100)}%"></i></div>` : ''}<div class="row2" style="margin-top:6px"><span>一般</span><b>${genDone}/${gen.length}</b></div></div>
-    ${myAsg.length ? `<h4>自分の割り当て（未完了 ${myAsg.length}）</h4><div class="card">${myAsg.slice(0, 5).map(a => `<div class="recItem" data-asg="${esc(a.id)}"><span class="t">${esc(a.town || '')}${a.flyer_id ? ' ／ ' + esc(flyerOf(a.flyer_id).name) : ''}</span><span class="n">${a.due ? '〜' + fmtDate(a.due) : ''}</span></div>`).join('')}</div>` : ''}
-    <h4>最近の記録</h4>
-    <div class="card">${recent.length ? recent.map(r => `<div class="recItem" data-rec="${esc(r.id)}"><span class="sw" style="background:${flyerOf(r.flyer_id).color}"></span><span class="t">${fmtDate(r.date)} ${esc(r.member)} ${esc(r.town || '')}</span><span class="n">${(r.count || 0).toLocaleString()}枚</span></div>`).join('') : '<div class="small">まだ記録がありません</div>'}</div>
+    ${sec('flyers', 'チラシ別（残り）', totals.length ? totals.map(f => `<div class="row2" style="margin:4px 0"><span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${safeColor(f.color)};margin-right:6px"></span>${esc(f.name)}</span><b>${f.used.toLocaleString()}${f.total ? ` / ${f.total.toLocaleString()}` : ''}枚</b></div>${f.total ? `<div class="bar"><i style="width:${Math.min(100, Math.round(f.used / f.total * 100))}%"></i></div><div class="small" style="text-align:right">残り ${f.remain.toLocaleString()}</div>` : ''}`).join('') : '<div class="small">表示中のチラシがありません</div>')}
+    ${sec('posters', `ポスター掲示場（貼った／全体）`, (byCity.length ? byCity.map(([c, t, d]) => `<div class="row2" style="margin:4px 0"><span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${ADMIN_COLORS[c] || '#888'};margin-right:6px"></span>${esc(c)}</span><b>${d}/${t}${t ? `（${Math.round(d / t * 100)}%）` : ''}</b></div><div class="bar"><i style="width:${t ? Math.round(d / t * 100) : 0}%;background:${postedColor(c)}"></i></div>`).join('') + `<div class="row2" style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px"><span>合計</span><b>${offDone}/${off.length}${off.length ? `（${Math.round(offDone / off.length * 100)}%）` : ''}</b></div>` : '<div class="small">掲示場データがありません</div>') + (gen.length ? `<div class="row2" style="margin-top:6px"><span>一般ポスター</span><b>${genDone}/${gen.length}</b></div>` : '') + (pol.length ? `<div class="row2" style="margin-top:6px"><span>二連ポスター</span><b>${pol.filter(b => b.status === 'done').length}/${pol.length}</b></div>` : ''))}
+    ${myAsg.length ? sec('mine', `自分の割り当て（未完了 ${myAsg.length}）`, myAsg.slice(0, 5).map(a => `<div class="recItem" data-asg="${esc(a.id)}"><span class="t">${isPosterAsg(a) ? '📌 ' : ''}${esc(a.town || '')}${a.flyer_id ? ' ／ ' + esc(flyerOf(a.flyer_id).name) : ''}</span><span class="n">${a.due ? '〜' + fmtDate(a.due) : ''}</span></div>`).join('')) : ''}
+    ${sec('recent', '最近の記録', recent.length ? recent.map(r => `<div class="recItem" data-rec="${esc(r.id)}"><span class="sw" style="background:${flyerOf(r.flyer_id).color}"></span><span class="t">${fmtDate(r.date)} ${esc(r.member)} ${esc(r.town || '')}</span><span class="n">${(r.count || 0).toLocaleString()}枚</span></div>`).join('') : '<div class="small">まだ記録がありません</div>')}
+    ${sec('events', '次の予定（辻立ち・拠点）', up.length ? up.map(e => `<div class="recItem" data-ev="${esc(e.id)}"><span class="t"><b>${fmtDate(e.date)}</b> ${esc(e.time || '')} ${esc(spotName(e.spot_id))}</span><span class="n">${Array.isArray(e.attendees) && e.attendees.length ? `参加${e.attendees.length}` : ''}</span></div>`).join('') : '<div class="small">予定はありません</div>')}
     <h4>画面</h4>
     <div class="navBtns">
       <button data-go="list">📋 配布一覧・CSV</button><button data-go="towns">🏘 町丁目の配布率</button>
@@ -2386,6 +2436,7 @@ function renderDash() {
       <button data-go="rules">⚠ してはいけないこと</button>${isAdmin() ? '<button data-go="settings">⚙ 設定</button>' : ''}
     </div>
     <div class="small" style="margin-top:10px;color:var(--muted)">👤 ${esc(S.user || '')}　／　同じチラシの重なりは赤、町丁目の白線をクリックで配布率</div>`;
+  el.querySelectorAll('.dsec').forEach(h => h.onclick = () => { const k = h.dataset.k; if (closed.has(k)) closed.delete(k); else closed.add(k); localStorage.setItem('cm_dash_closed', JSON.stringify([...closed])); renderDash(); });
   el.querySelectorAll('[data-rec]').forEach(x => x.onclick = () => { const r = S.records.find(y => y.id === x.dataset.rec); if (!r) return; const c = turf.centerOfMass(recPolygon(r)).geometry.coordinates; S.map.panTo({ lat: c[1], lng: c[0] }); if (S.map.getZoom() < 16) S.map.setZoom(16); showRecord(r); });
   el.querySelectorAll('[data-ev]').forEach(x => x.onclick = () => { const e = S.events.find(y => y.id === x.dataset.ev); const sp = e && S.spots.find(y => y.id === e.spot_id); if (!sp) return; S.map.panTo({ lat: sp.lat, lng: sp.lng }); showSpot(sp); });
   el.querySelectorAll('[data-asg]').forEach(x => x.onclick = () => { const a = S.assignments.find(y => y.id === x.dataset.asg); if (!a) return; const c = turf.centerOfMass(turf.polygon([a.polygon])).geometry.coordinates; S.map.panTo({ lat: c[1], lng: c[0] }); showAssignment(a); });
@@ -2431,7 +2482,8 @@ function bindUI() {
   $('#btnRules').onclick = () => { $('#menu').hidden = true; showRules(false); };
   $('#btnStudy').onclick = () => { $('#menu').hidden = true; showStudy('core'); };
   $('#btnAssignClose').onclick = () => toggleAssignBar(false);
-  $('#btnAssignAdd').onclick = startAssignDraw;
+  $('#btnAssignAdd').onclick = () => startAssignDraw('flyer');
+  $('#btnBoardAssign').onclick = () => startAssignDraw('poster');
   $('#btnAssignList').onclick = showAssignList;
   $('#btnStations').onclick = () => { S.stationsOn = !S.stationsOn; $('#btnStations').classList.toggle('on', S.stationsOn); renderStations(); };
   $('#btnBoardImport').onclick = openBoardImport;
