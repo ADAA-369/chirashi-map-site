@@ -1589,7 +1589,8 @@ function renderBoards() {
   const chipOn = boardCitySet();
   const vb = viewBbox(0.3);
   // 掲示場モード外（チップ表示）では、引いた地図で邪魔にならないよう小さく描く
-  const z = S.map.getZoom(); const iconScale = S.boardsOn || z >= 16 ? 1 : z >= 14.5 ? 0.7 : 0.5;
+  // 掲示場モード中も拡大率に合わせて小さく（大きすぎて範囲を囲めない、という指摘に対応）
+  const z = S.map.getZoom(); const iconScale = z >= 17 ? 1 : z >= 16 ? 0.85 : z >= 15 ? 0.7 : z >= 14 ? 0.55 : 0.45;
   for (const b of S.boards) {
     const kind = b.kind || 'official';
     const inMode = S.boardsOn && (S.boardKindFilter === 'all' || kind === S.boardKindFilter);
