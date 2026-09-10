@@ -475,6 +475,18 @@ const ADMIN_COLORS = {
   '飛島村': '#00695c',  // 濃い青緑
   '大治町': '#795548',  // 濃い茶
 };
+// 「貼った」掲示場の色＝市町村色の反対色（本人指定：稲沢の緑と「完了の緑」が紛れないように）
+const POSTED_COLORS = {
+  '蟹江町': '#1e40af',  // オレンジ → 紺
+  'あま市': '#0f766e',  // ワイン → 深い青緑
+  '津島市': '#f59e0b',  // 紺 → 山吹
+  '稲沢市': '#d81b60',  // 濃い緑 → 濃いピンク
+  '愛西市': '#2e7d32',  // ピンク → 緑
+  '弥富市': '#ef6c00',  // 水色 → オレンジ
+  '飛島村': '#d84315',  // 青緑 → 朱
+  '大治町': '#0288d1',  // 茶 → 水色
+};
+const postedColor = city => POSTED_COLORS[city] || '#16a34a';
 // 既定の並びを変えたので、古い端末側の並び順は一度リセット（2026-09-09）
 if (localStorage.getItem('cm_admin_order_v') !== '2') { localStorage.removeItem('cm_admin_order'); localStorage.setItem('cm_admin_order_v', '2'); }
 // 表示ON/OFF（端末ごとに記憶）
@@ -1494,8 +1506,9 @@ function boardIcon(kind, color, text, status, scale = 1) {
     // 公営掲示場：市町村の色の四角の中に番号（本人指定。状態は右上の小さな印で表す）
     const fs = t.length >= 3 ? 15 : t.length === 2 ? 19 : 22;
     // 貼った掲示場は白地＋緑の縁と数字（稲沢の濃い緑など市町村色と見分けがつくように）
-    const done = status === 'done'; const fill = done ? '#ffffff' : color, edge = done ? '#16a34a' : '#ffffff', txt = done ? '#15803d' : '#ffffff';
-    const svgO = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><path d='M17,43 L24,52 L31,43 Z' fill='${done ? '#16a34a' : color}'/><rect x='4' y='4' width='40' height='40' rx='9' fill='${fill}' stroke='${edge}' stroke-width='3'/><text x='24' y='${t.length >= 3 ? 29.5 : 31}' font-size='${fs}' font-weight='800' text-anchor='middle' fill='${txt}' font-family='sans-serif'>${t}</text>${done ? `<circle cx='40' cy='8' r='8' fill='#16a34a' stroke='#fff' stroke-width='2'/><text x='40' y='11.5' font-size='10' font-weight='800' text-anchor='middle' fill='#fff' font-family='sans-serif'>✓</text>` : ''}</svg>`;
+    // 「貼った」は市町村色の反対色（renderBoards で color に渡される）＋右上に✓
+    const done = status === 'done';
+    const svgO = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><path d='M17,43 L24,52 L31,43 Z' fill='${color}'/><rect x='4' y='4' width='40' height='40' rx='9' fill='${color}' stroke='#fff' stroke-width='3'/><text x='24' y='${t.length >= 3 ? 29.5 : 31}' font-size='${fs}' font-weight='800' text-anchor='middle' fill='#fff' font-family='sans-serif'>${t}</text>${done ? `<circle cx='40' cy='8' r='8' fill='#fff' stroke='${color}' stroke-width='2'/><text x='40' y='11.5' font-size='10' font-weight='800' text-anchor='middle' fill='${color}' font-family='sans-serif'>✓</text>` : ''}</svg>`;
     return { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svgO), scaledSize: size, anchor };
   }
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><rect x='1' y='1' width='46' height='54' rx='8' fill='${color}' opacity='.25'/>${board}${num}${badge}</svg>`;
@@ -1574,7 +1587,7 @@ function renderBoards() {
     const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
     // 公営掲示場は市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）。状態は印で表す
     // 公営掲示場：貼ったら緑、まだなら市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）
-    const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : kind === 'official' ? (ADMIN_COLORS[boardCity(b)] || st.color) : st.color;
+    const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : kind === 'official' ? (b.status === 'done' ? postedColor(boardCity(b)) : (ADMIN_COLORS[boardCity(b)] || st.color)) : st.color;
     const m = new google.maps.Marker({
       position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20, clickable: overlaysClickable(),
       icon: boardIcon(kind, color, b.no, b.status, iconScale),
@@ -1614,7 +1627,7 @@ async function showBoard(b) {
     ${b.kind === 'political' ? '<div class="small">※候補者名入りの政治活動用ポスターは任期満了日の6か月前から投票日まで掲示できません。掲示責任者・印刷者の表示と、掲示場所の所有者の許諾を確認</div>' : ''}
     ${(b.kind || 'official') === 'official'
       // 公営掲示場は「まだ／貼った」の2択（本人指定）。古い状態（予約・対応中など）が残っていても「まだ」扱い
-      ? `<div class="stTabs"><button data-st="todo" class="${b.status !== 'done' ? 'on' : ''}" style="color:${ADMIN_COLORS[boardCity(b)] || '#e8eef5'};font-weight:700">まだ貼っていない</button><button data-st="done" class="${b.status === 'done' ? 'on' : ''}" style="color:#22c55e;font-weight:700">✓ 貼った</button></div>`
+      ? `<div class="stTabs"><button data-st="todo" class="${b.status !== 'done' ? 'on' : ''}" style="color:${ADMIN_COLORS[boardCity(b)] || '#e8eef5'};font-weight:700">まだ貼っていない</button><button data-st="done" class="${b.status === 'done' ? 'on' : ''}" style="color:${postedColor(boardCity(b))};font-weight:700">✓ 貼った</button></div>`
       : `<div class="stTabs stTabs6">
       ${Object.entries(BOARD_STYLE).map(([k, v]) => `<button data-st="${k}" class="${b.status === k ? 'on' : ''}" style="color:${v.color}">${v.label === '未' ? '未着手' : v.label === '予' ? '予約' : v.label === '中' ? '対応中' : v.label === '済' ? '完了' : v.label === '異' ? '異常' : '要確認'}</button>`).join('')}
     </div>`}
@@ -2389,6 +2402,10 @@ function bindUI() {
   $('#btnAdjustCancel').onclick = () => { endAdjust(false); clearDraft(); };
   $('#btnAdjustOk').onclick = () => endAdjust(true);
   $('#btnMenu').onclick = () => { $('#menu').hidden = false; applyRole(); };
+  // 表示パネル（チラシ・境界線・地名・掲示板のチップ）：ボタンで開閉。開閉状態は端末に記憶
+  const setLayers = open => { $('#layerPanel').hidden = !open; $('#btnLayers').classList.toggle('on', open); localStorage.setItem('cm_layers_open', open ? '1' : '0'); if (S.map) setTimeout(() => google.maps.event.trigger(S.map, 'resize'), 50); };
+  setLayers(localStorage.getItem('cm_layers_open') === '1');
+  $('#btnLayers').onclick = () => setLayers($('#layerPanel').hidden);
   $('#btnMenuClose').onclick = () => $('#menu').hidden = true;
   document.querySelectorAll('.menuItem[data-view]').forEach(b => b.onclick = () => {
     $('#menu').hidden = true;

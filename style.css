@@ -43,7 +43,13 @@ h1,h2,h3{margin:0 0 8px}
 .adminChips .chip:not(.on){opacity:.55}
 .adminChips .chip .caret{font-size:9px;opacity:.8;margin-left:1px}
 .adminChips .chip .sub{font-size:9px;background:rgba(0,0,0,.35);border-radius:6px;padding:0 4px;margin-left:3px}
-.boardChips{padding-top:2px}
+/* 1段目（チラシ）も2〜3段目と同じ小ささに */
+.flyerChips .chip{padding:3px 9px;font-size:11.5px;gap:5px}
+.flyerChips .chip .dot{width:8px;height:8px}
+/* 2段目と3段目の間を空けて押し間違いを防ぐ */
+.boardChips{padding-top:9px;margin-top:5px;border-top:1px dashed rgba(0,0,0,.28)}
+#layerPanel{padding-top:2px}
+#btnLayers.on{background:rgba(0,0,0,.18);border-radius:8px}
 .boardChips .chip.on{background:#111;border-color:var(--c);color:#fff}
 .boardChips .chip.on .dot{box-shadow:0 0 0 2px rgba(255,255,255,.35)}
 #chipMenu{position:fixed;z-index:60;width:250px;background:#111;color:#eee;border:1px solid #333;border-radius:12px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.5);font-size:13px}

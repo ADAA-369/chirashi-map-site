@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="配布MAP">
-<link rel="stylesheet" href="style.css?v=20260910141014">
+<link rel="stylesheet" href="style.css?v=20260910141629">
 </head>
 <body>
 
@@ -19,6 +19,7 @@
   <header id="topbar">
     <div class="row">
       <button id="btnMenu" class="icon" aria-label="メニュー">☰</button>
+      <button id="btnLayers" class="icon" aria-label="表示するものを選ぶ" title="チラシ・境界線・地名・掲示板の表示切り替え">▦</button>
       <button id="btnSearch" class="icon" aria-label="場所を検索">🔍</button>
       <div id="title"><span class="t1">参政党 愛知9支部</span><span class="t2">チラシ配布<em>MAP</em></span></div>
       <select id="periodSel" aria-label="期間">
@@ -27,9 +28,11 @@
         <option value="7">直近7日</option>
       </select>
     </div>
-    <div id="flyerChips" class="chips"></div>
-    <div id="adminChips" class="chips adminChips"></div>
-    <div id="boardChips" class="chips adminChips boardChips"></div>
+    <div id="layerPanel" hidden>
+      <div id="flyerChips" class="chips flyerChips"></div>
+      <div id="adminChips" class="chips adminChips"></div>
+      <div id="boardChips" class="chips adminChips boardChips"></div>
+    </div>
   </header>
 
   <div id="noticeBanner" hidden></div>
@@ -183,9 +186,9 @@
   <div id="toast" hidden></div>
 </div>
 
-<script src="config.js?v=20260910141014"></script>
+<script src="config.js?v=20260910141629"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
-<script src="app.js?v=20260910141014"></script>
+<script src="app.js?v=20260910141629"></script>
 </body>
 </html>
