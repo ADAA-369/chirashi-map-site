@@ -156,7 +156,7 @@ h1,h2,h3{margin:0 0 8px}
 #zoomBtns button:last-child{border-bottom:0}
 #zoomBtns button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 #zoomBtns button:active{background:#e6e6e6}
-#centerMark{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#fff;font-size:26px;line-height:1;font-weight:400;text-shadow:0 0 3px #000,0 0 2px #000,0 1px 2px #000;pointer-events:none;z-index:5;opacity:.95}
+#centerMark{display:none}   /* 中央の＋印は本人指示で非表示（2026-09-10） */
 #fab{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(18px + var(--safe-bottom));z-index:6;background:var(--orange);color:#111;border:2px solid #111;font-weight:700;padding:14px 18px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.45);font-size:15px}
 #fab:disabled{background:#555;opacity:.8}
 
