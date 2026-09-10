@@ -286,7 +286,11 @@ async function init() {
     window.addEventListener('online', async () => { try { if (await SupabaseStore.flushOutbox()) await refreshAll(); } catch { } });
   }
   setTimeout(offerDraftResume, 500);
-  if (localStorage.getItem('cm_rules_ack') !== String(RULES_VERSION)) setTimeout(() => { if ($('#sheet').hidden) showRules(true); else setTimeout(() => showRules(true), 20000); }, 800);
+  // 「してはいけないこと」は、その版につき端末で1回だけ自動表示（閉じ方に関係なく、出した時点で表示済みにする。メニューからいつでも見直せる）
+  if (localStorage.getItem('cm_rules_ack') !== String(RULES_VERSION)) {
+    const showOnce = () => { localStorage.setItem('cm_rules_ack', String(RULES_VERSION)); showRules(true); };
+    setTimeout(() => { if ($('#sheet').hidden) showOnce(); else setTimeout(() => { if ($('#sheet').hidden) showOnce(); else localStorage.setItem('cm_rules_ack', String(RULES_VERSION)); }, 20000); }, 800);
+  }
   setInterval(renderNotice, 60000);
   store.subscribe((recs, sets, boards, spots, events, asg) => {
     S.records = recs; if (boards) S.boards = boards; if (spots) S.spots = spots; if (events) S.events = events; if (asg) S.assignments = asg;
@@ -410,6 +414,9 @@ async function initMap() {
   class Proj extends OverlayView { onAdd() { } draw() { } onRemove() { } }
   S.proj = new Proj(); S.proj.setMap(S.map);
   S.infoWin = new InfoWindow();
+  // 「地図＋写真／地図」の選択を端末に記憶し、次に開いた時も同じにする
+  try { const mt = localStorage.getItem('cm_maptype'); if (mt === 'roadmap' || mt === 'hybrid') S.map.setMapTypeId(mt); } catch { }
+  S.map.addListener('maptypeid_changed', () => { try { localStorage.setItem('cm_maptype', S.map.getMapTypeId()); } catch { } });
   // 現在地ボタン
   const loc = document.createElement('button');
   loc.className = 'ghost'; loc.textContent = '◎'; loc.title = '現在地';
