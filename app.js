@@ -46,6 +46,7 @@ const LocalStore = {
   async deleteBoard(id) { localStorage.setItem(this.bkey, JSON.stringify((await this.loadBoards()).filter(x => x.id !== id))); },
   async uploadPhoto() { toast('端末内保存版では写真を保存できません'); return null; },
   async photoUrl() { return null; },
+  async deletePhoto() { },
   _l(k) { try { return JSON.parse(localStorage.getItem(k) || '[]'); } catch { return []; } },
   _s(k, a) { localStorage.setItem(k, JSON.stringify(a)); },
   async loadSpots() { return this._l('cm_spots_v1'); },
@@ -191,6 +192,7 @@ const SupabaseStore = {
     const { data, error } = await this.client.storage.from('posters').createSignedUrl(path, 3600);
     return error ? null : data.signedUrl;
   },
+  async deletePhoto(path) { if (!path) return; try { await this.client.storage.from('posters').remove([path]); } catch (e) { console.warn('photo delete', e); } },
   async loadSpots() { const { data, error } = await this.client.from('spots').select('*').eq('deleted', false).order('name'); if (error) { console.error(error); return this.overlay('spot', S.spots || []); } return this.overlay('spot', data); },
   async saveSpot(x) { const row = { id: x.id, kind: x.kind || 'station', name: x.name || '', lat: x.lat, lng: x.lng, memo: x.memo || '', updated_at: new Date().toISOString() }; await this._write('spot', 'save', row, () => this.client.from('spots').upsert(row)); },
   async deleteSpot(id) { await this._write('spot', 'del', { id }, () => this.client.from('spots').update({ deleted: true, updated_at: new Date().toISOString() }).eq('id', id)); },
@@ -1631,12 +1633,16 @@ async function showBoard(b) {
   `);
   let status = b.status;
   $('#sheetBody').querySelectorAll('.stTabs button').forEach(btn => btn.onclick = () => { status = btn.dataset.st; $('#sheetBody').querySelectorAll('.stTabs button').forEach(x => x.classList.toggle('on', x === btn)); });
-  if (b.photo_path) { const url = await store.photoUrl(b.photo_path); $('#bPhotoBox').innerHTML = url ? `<img src="${esc(url)}" alt="貼付写真">` : '<div class="small">写真を表示できません</div>'; }
-  let newBlob = null;
+  let newBlob = null, removePhoto = false;
+  if (b.photo_path) {
+    const url = await store.photoUrl(b.photo_path);
+    $('#bPhotoBox').innerHTML = url ? `<a href="${esc(url)}" target="_blank" rel="noopener" title="タップで大きく表示"><img src="${esc(url)}" alt="貼付写真"></a><div class="btnRow" style="margin-top:6px"><button class="ghost small" id="bPhotoDel" style="color:var(--danger)">🗑 この写真を削除</button><span class="small">差し替えは上の「カメラで撮る／写真から選ぶ」</span></div>` : '<div class="small">写真を表示できません</div>';
+    const del = $('#bPhotoDel'); if (del) del.onclick = () => { if (!confirm('この写真を削除しますか？（「保存する」で確定します）')) return; removePhoto = true; newBlob = null; $('#bPhotoBox').innerHTML = '<div class="small">写真を削除します（「保存する」で確定）</div>'; };
+  }
   $('#bPhoto2').onchange = e => $('#bPhoto').onchange(e);
   $('#bPhoto').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
-    newBlob = await shrinkImage(f, 1280, 0.8);
+    newBlob = await shrinkImage(f, 1280, 0.8); removePhoto = false;
     if (!newBlob) { e.target.value = ''; return; }
     $('#bPhotoBox').innerHTML = `<img src="${URL.createObjectURL(newBlob)}" alt="プレビュー"><div class="small">約${Math.round(newBlob.size / 1024)}KB（保存で確定）</div>`;
     if (status === 'todo') { status = 'done'; $('#sheetBody').querySelectorAll('.stTabs button').forEach(x => x.classList.toggle('on', x.dataset.st === 'done')); }
@@ -1649,8 +1655,11 @@ async function showBoard(b) {
     const nb = { ...b, status, posted_by: $('#bBy').value, posted_at: $('#bDate').value || today(), memo: $('#bMemo').value.trim(), no: $('#bNo').value.trim(), place: $('#bPlace').value.trim(), kind: $('#bKind').value };
     if (status === 'todo') { nb.posted_by = null; nb.posted_at = null; }
     if (status === 'reserved') { nb.posted_at = null; }
+    const oldPath = b.photo_path || null;
     if (newBlob) { const path = await store.uploadPhoto(newBlob, b.id); if (!path) { $('#bSave').disabled = false; return; } nb.photo_path = path; }
+    else if (removePhoto) nb.photo_path = null;
     try { await store.saveBoard(nb); } catch { $('#bSave').disabled = false; return; }
+    if (oldPath && oldPath !== nb.photo_path) store.deletePhoto(oldPath);   // 古い写真は保存が通ってから消す（失敗しても支障なし）
     S.boards = await store.loadBoards(); closeSheet(); renderBoards(); toast('保存しました');
   };
 }
