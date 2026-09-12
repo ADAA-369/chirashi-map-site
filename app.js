@@ -1677,7 +1677,7 @@ function renderBoards() {
   // 掲示場モード外（チップ表示）では、引いた地図で邪魔にならないよう小さく描く
   // 掲示場モード中も拡大率に合わせて小さく（大きすぎて範囲を囲めない、という指摘に対応）
   // 引いた時は小さく（重なり防止）、寄った時は大きく（番号を読みやすく）
-  const z = S.map.getZoom(); const iconScale = z >= 16.5 ? 1.15 : z >= 15.5 ? 1 : z >= 14.5 ? 0.75 : z >= 13.5 ? 0.55 : 0.45;
+  const z = S.map.getZoom(); const iconScale = z >= 16.5 ? 1.15 : z >= 15.5 ? 1 : z >= 14.5 ? 0.75 : z >= 13.5 ? 0.6 : 0.5;
   // まず「今回描くもの」を決め、前回と同じなら描き直さない（ピンチ操作のたびに数百個のピンを作り直してスマホが固まるのを防ぐ）
   const show = [];
   for (const b of S.boards) {
@@ -1694,7 +1694,7 @@ function renderBoards() {
   for (const m of S.boardMarkers.values()) m.setMap(null);
   S.boardMarkers.clear();
   // スマホのメモリ対策：引いた地図では小さな点だけ（番号なし）。数百個の画像を作らない
-  const dotsOnly = z < 13.5;
+  const dotsOnly = z < 12.3;   // 町全体が見える程度（z13前後）までは番号つき、それより引いたら点だけ
   for (const b of show) {
     const kind = b.kind || 'official';
     const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
@@ -1709,7 +1709,7 @@ function renderBoards() {
       opts = { icon: { path: google.maps.SymbolPath.CIRCLE, scale: 5, fillColor: color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.5 } };
     } else if (kind === 'official') {
       // 画像は「色×大きさ×貼った」ごとに1枚だけ作って使い回し、番号は文字ラベルで載せる（1件ごとに画像を作るとiPhoneのメモリが尽きて白画面になる）
-      opts = { icon: officialIcon(color, iconScale, b.status === 'done'), label: dispNo ? { text: dispNo.slice(0, 5), color: '#fff', fontSize: `${Math.round((dispNo.length >= 4 ? 11 : dispNo.length === 3 ? 13 : 16) * iconScale)}px`, fontWeight: '800', fontFamily: 'sans-serif' } : undefined };
+      opts = { icon: officialIcon(color, iconScale, b.status === 'done'), label: dispNo ? { text: dispNo.slice(0, 5), color: '#fff', fontSize: `${Math.max(9, Math.round((dispNo.length >= 4 ? 11 : dispNo.length === 3 ? 13 : 16) * iconScale))}px`, fontWeight: '800', fontFamily: 'sans-serif' } : undefined };
     } else {
       opts = { icon: boardIcon(kind, color, b.no, b.status, iconScale) };
     }
