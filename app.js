@@ -413,7 +413,8 @@ async function initMap() {
     disableDefaultUI: true, zoomControl: false, mapTypeControl: true,
     mapTypeControlOptions: { mapTypeIds: ['hybrid', 'roadmap'], position: google.maps.ControlPosition.RIGHT_TOP },
     gestureHandling: 'greedy', clickableIcons: false,
-    isFractionalZoomEnabled: true,   // ピンチで無段階に拡大縮小（整数段階に吸着させない）
+    // 無段階ズームはPCだけ。スマホではピンチ中に境界線・地名・ピンを描き直し続けてメモリが尽き、白画面で固まる原因になるため段階ズームにする
+    isFractionalZoomEnabled: !window.matchMedia('(pointer: coarse)').matches,
   });
   class Proj extends OverlayView { onAdd() { } draw() { } onRemove() { } }
   S.proj = new Proj(); S.proj.setMap(S.map);
@@ -441,7 +442,8 @@ async function initMap() {
   // ＋−は半段階ずつ（Googleの1段階＝2倍は大きすぎるため）。長押しで連続
   const zoomBy = d => S.map.setZoom(S.map.getZoom() + d);
   const holdZoom = (btn, d) => { let t = null, rep = null; const start = e => { e.preventDefault(); zoomBy(d); t = setTimeout(() => { rep = setInterval(() => zoomBy(d), 220); }, 400); }; const stop = () => { clearTimeout(t); clearInterval(rep); t = rep = null; }; btn.addEventListener('pointerdown', start); btn.addEventListener('pointerup', stop); btn.addEventListener('pointercancel', stop); btn.addEventListener('pointerleave', stop); };
-  holdZoom($('#zoomIn'), 0.35); holdZoom($('#zoomOut'), -0.35);
+  const zStep = window.matchMedia('(pointer: coarse)').matches ? 1 : 0.35;   // スマホは段階ズームなので1段ずつ
+  holdZoom($('#zoomIn'), zStep); holdZoom($('#zoomOut'), -zStep);
   // 地図を長押し → ピンを立てて「ここで何をする？」（誤爆防止：1本指・動かさない・0.7秒・描画中などは無効）
   const mapEl = $('#map'); let lp = null, pointers = 0;
   const cancelLp = () => { if (lp) { clearTimeout(lp.timer); lp = null; } };
@@ -498,6 +500,10 @@ const POSTED_COLORS = {
   '大治町': '#0288d1',  // 茶 → 水色
 };
 const postedColor = city => POSTED_COLORS[city] || '#16a34a';
+// 稲沢市は元の地図と同じ5班の色分け（番号が班ごとに1から振られているため、番号だけだと重なる）。p＝貼った時の反対色
+const INAZAWA_TEAM = { 1: { c: '#a52714', p: '#00acc1' }, 2: { c: '#f9a825', p: '#3949ab' }, 3: { c: '#9c27b0', p: '#7cb342' }, 4: { c: '#0288d1', p: '#fb8c00' }, 5: { c: '#0f9d58', p: '#d81b60' } };
+// 「2-14」のような班つき番号を {team:2, num:'14'} に分ける（班なしなら null）
+const boardTeam = b => { const m = /^(\d)-(\d+)$/.exec(String(b.no || '')); return m && INAZAWA_TEAM[+m[1]] ? { team: +m[1], num: m[2] } : null; };
 // 既定の並びを変えたので、古い端末側の並び順は一度リセット（2026-09-09）
 if (localStorage.getItem('cm_admin_order_v') !== '2') { localStorage.removeItem('cm_admin_order'); localStorage.setItem('cm_admin_order_v', '2'); }
 // 表示ON/OFF（端末ごとに記憶）
@@ -600,7 +606,7 @@ function styleOaza() {
   if (!S.oazaLayer || !S.map) return;
   const z = S.map.getZoom(); const on = oazaCitySet();
   S.oazaLayer.setStyle(f => { const city = f.getProperty('city');
-    return { visible: on.has(city) && z >= 12.5, clickable: false, fillOpacity: 0, strokeColor: oazaColor(city), strokeOpacity: 0.95, strokeWeight: z >= 16 ? 2.5 : z >= 14 ? 2 : 1.5, zIndex: 2 }; });
+    return { visible: on.has(city) && z >= 13, clickable: false, fillOpacity: 0, strokeColor: oazaColor(city), strokeOpacity: 0.95, strokeWeight: z >= 16 ? 2.5 : z >= 14 ? 2 : 1.5, zIndex: 2 }; });
 }
 // 地名ラベル：表示範囲内だけ描く。タップで地名全体の配布率
 function renderOazaLabels() {
@@ -1687,20 +1693,43 @@ function renderBoards() {
   S._boardKey = key;
   for (const m of S.boardMarkers.values()) m.setMap(null);
   S.boardMarkers.clear();
+  // スマホのメモリ対策：引いた地図では小さな点だけ（番号なし）。数百個の画像を作らない
+  const dotsOnly = z < 13.5;
   for (const b of show) {
     const kind = b.kind || 'official';
     const st = BOARD_STYLE[b.status] || BOARD_STYLE.todo;
-    // 公営掲示場は市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）。状態は印で表す
-    // 公営掲示場：貼ったら緑、まだなら市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）
-    const color = kind === 'political' && b.status === 'done' ? politicalColor(b) : kind === 'official' ? (b.status === 'done' ? postedColor(boardCity(b)) : (ADMIN_COLORS[boardCity(b)] || st.color)) : st.color;
+    // 公営掲示場：貼ったら市町村色の反対色、まだなら市町村の色（津島＝紺、蟹江＝オレンジ、愛西＝ピンク…）
+    const tm = kind === 'official' ? boardTeam(b) : null;   // 稲沢の班（色分け＋番号は班を外して表示）
+    const color = kind === 'political' && b.status === 'done' ? politicalColor(b)
+      : kind === 'official' ? (tm ? (b.status === 'done' ? INAZAWA_TEAM[tm.team].p : INAZAWA_TEAM[tm.team].c) : (b.status === 'done' ? postedColor(boardCity(b)) : (ADMIN_COLORS[boardCity(b)] || st.color)))
+      : st.color;
+    const dispNo = tm ? tm.num : String(b.no || '');
+    let opts;
+    if (kind === 'official' && dotsOnly) {
+      opts = { icon: { path: google.maps.SymbolPath.CIRCLE, scale: 5, fillColor: color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.5 } };
+    } else if (kind === 'official') {
+      // 画像は「色×大きさ×貼った」ごとに1枚だけ作って使い回し、番号は文字ラベルで載せる（1件ごとに画像を作るとiPhoneのメモリが尽きて白画面になる）
+      opts = { icon: officialIcon(color, iconScale, b.status === 'done'), label: dispNo ? { text: dispNo.slice(0, 5), color: '#fff', fontSize: `${Math.round((dispNo.length >= 4 ? 11 : dispNo.length === 3 ? 13 : 16) * iconScale)}px`, fontWeight: '800', fontFamily: 'sans-serif' } : undefined };
+    } else {
+      opts = { icon: boardIcon(kind, color, b.no, b.status, iconScale) };
+    }
     const m = new google.maps.Marker({
-      position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20, clickable: overlaysClickable(),
-      icon: boardIcon(kind, color, b.no, b.status, iconScale),
+      position: { lat: b.lat, lng: b.lng }, map: S.map, zIndex: 20, clickable: overlaysClickable(), optimized: true, ...opts,
       title: `${b.no ? b.no + ' ' : ''}${b.place || ''}（${BOARD_ST_LABEL(b.status)}）`,
     });
     m.addListener('click', () => { if (overlaysClickable()) showBoard(b); });
     S.boardMarkers.set(b.id, m);
   }
+}
+// 公営掲示場の四角い画像（番号なし）。同じ色・大きさなら同じ画像を返す
+const _officialIcons = new Map();
+function officialIcon(color, scale, done) {
+  const k = `${color}|${scale}|${done ? 1 : 0}`;
+  if (_officialIcons.has(k)) return _officialIcons.get(k);
+  const badge = done ? `<circle cx='40' cy='8' r='8' fill='#fff' stroke='${color}' stroke-width='2'/><text x='40' y='11.5' font-size='10' font-weight='800' text-anchor='middle' fill='${color}' font-family='sans-serif'>✓</text>` : '';
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='56' viewBox='0 0 48 56'><path d='M17,43 L24,52 L31,43 Z' fill='${color}'/><rect x='4' y='4' width='40' height='40' rx='9' fill='${color}' stroke='#fff' stroke-width='3'/>${badge}</svg>`;
+  const icon = { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), scaledSize: new google.maps.Size(Math.round(48 * scale), Math.round(56 * scale)), anchor: new google.maps.Point(Math.round(24 * scale), Math.round(52 * scale)), labelOrigin: new google.maps.Point(Math.round(24 * scale), Math.round(24 * scale)) };
+  _officialIcons.set(k, icon); return icon;
 }
 async function addBoardAt(latLng) {
   setBoardAdding(false);
@@ -1733,7 +1762,7 @@ async function showBoard(b) {
     ${(() => { const pa = (b.kind || 'official') === 'official' ? posterAsgOf(b) : null; return pa ? `<div class="small" style="color:#d8b4fe">📌 受け持ち：<b>${esc(pa.member || '未定')}</b>${pa.due ? `（${esc(pa.due)}）` : ''}${pa.note ? `　${esc(pa.note)}` : ''}</div>` : ''; })()}
     ${(b.kind || 'official') === 'official'
       // 公営掲示場は「まだ／貼った」の2択（本人指定）。古い状態（予約・対応中など）が残っていても「まだ」扱い
-      ? `<div class="stTabs"><button data-st="todo" class="${b.status !== 'done' ? 'on' : ''}" style="color:${ADMIN_COLORS[boardCity(b)] || '#e8eef5'};font-weight:700">まだ貼っていない</button><button data-st="done" class="${b.status === 'done' ? 'on' : ''}" style="color:${postedColor(boardCity(b))};font-weight:700">✓ 貼った</button></div>`
+      ? `<div class="stTabs"><button data-st="todo" class="${b.status !== 'done' ? 'on' : ''}" style="color:${boardTeam(b) ? INAZAWA_TEAM[boardTeam(b).team].c : (ADMIN_COLORS[boardCity(b)] || '#e8eef5')};font-weight:700">まだ貼っていない</button><button data-st="done" class="${b.status === 'done' ? 'on' : ''}" style="color:${boardTeam(b) ? INAZAWA_TEAM[boardTeam(b).team].p : postedColor(boardCity(b))};font-weight:700">✓ 貼った</button></div>${boardTeam(b) ? `<div class="small">稲沢市 ${['', '①グループ（赤）', '②チーム（黄）', '③チーム（紫）', '④チーム（青）', '⑤チーム（緑）'][boardTeam(b).team]}　地図上の番号は「${esc(boardTeam(b).num)}」</div>` : ''}`
       : `<div class="stTabs stTabs6">
       ${Object.entries(BOARD_STYLE).map(([k, v]) => `<button data-st="${k}" class="${b.status === k ? 'on' : ''}" style="color:${v.color}">${v.label === '未' ? '未着手' : v.label === '予' ? '予約' : v.label === '中' ? '対応中' : v.label === '済' ? '完了' : v.label === '異' ? '異常' : '要確認'}</button>`).join('')}
     </div>`}
