@@ -411,7 +411,8 @@ async function initMap() {
     center: view.center, zoom: view.zoom,
     mapTypeId: 'hybrid', tilt: 0,
     disableDefaultUI: true, zoomControl: false, mapTypeControl: true,
-    mapTypeControlOptions: { mapTypeIds: ['hybrid', 'roadmap'], position: google.maps.ControlPosition.RIGHT_TOP },
+    // PCでは右側に一覧パネルが重なって隠れるため、切り替えボタンは上中央に置く
+    mapTypeControlOptions: { mapTypeIds: ['hybrid', 'roadmap'], position: isDesktop() ? google.maps.ControlPosition.TOP_CENTER : google.maps.ControlPosition.RIGHT_TOP },
     gestureHandling: 'greedy', clickableIcons: false,
     // 無段階ズームはPCだけ。スマホではピンチ中に境界線・地名・ピンを描き直し続けてメモリが尽き、白画面で固まる原因になるため段階ズームにする
     isFractionalZoomEnabled: !window.matchMedia('(pointer: coarse)').matches,
